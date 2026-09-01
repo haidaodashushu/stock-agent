@@ -1,0 +1,15 @@
+# BEGIN STOCK_AGENT_RUNTIME
+CRON_TZ=Asia/Shanghai
+30 8 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh premarket-selection >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+19 9 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh auction-cancelable >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+24 9 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh auction-locked >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+25 9 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh auction-final >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+0,30 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh simulated-trading >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+2,32 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh live-trading >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+*/10 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh intraday-radar >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+1-56/5 8-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh candidate-board >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+30 15 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh close-review >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+20 8,12,15,21 * * * {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh policy-radar >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+0 22 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh nightly-update >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+45 22 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh night-selection >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+# END STOCK_AGENT_RUNTIME

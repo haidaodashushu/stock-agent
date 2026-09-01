@@ -1,0 +1,19 @@
+{
+  "items": [],
+  "strategies": {
+    "washout_start": {
+      "name": "洗盘/启动监控",
+      "description": "判断洗盘是否结束，等待放量启动确认。"
+    },
+    "top_distribution": {
+      "name": "顶部/出货监控",
+      "description": "监控高位出货风险。",
+      "enabled": false
+    },
+    "breakout_retest": {
+      "name": "突破回踩监控",
+      "description": "监控突破后的缩量回踩确认。",
+      "enabled": false
+    }
+  }
+}

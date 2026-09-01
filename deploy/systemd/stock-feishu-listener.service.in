@@ -1,0 +1,18 @@
+[Unit]
+Description=Stock Feishu Inbound Message Listener
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{STOCK_ROOT}}
+Environment=PYTHONUNBUFFERED=1
+ExecStart={{STOCK_ROOT}}/scripts/stock_feishu_listener.sh
+Restart=always
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

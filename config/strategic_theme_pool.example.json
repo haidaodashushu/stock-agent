@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "target_size": 3,
+  "description": "Replace these sample stocks with your own strategic observation pool.",
+  "groups": [
+    {
+      "name": "示例观察组",
+      "stocks": [
+        ["600036", "招商银行"],
+        ["600519", "贵州茅台"],
+        ["000333", "美的集团"]
+      ]
+    }
+  ]
+}

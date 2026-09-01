@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>回测 - A股交易系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .nav { background: #1e293b; padding: 12px 24px; display: flex; gap: 24px; align-items: center;
+               border-bottom: 1px solid #334155; }
+        .nav a { color: #94a3b8; text-decoration: none; font-size: 14px; padding: 6px 12px;
+                 border-radius: 6px; transition: all 0.2s; }
+        .nav a:hover, .nav a.active { background: #334155; color: #fff; }
+        .nav .title { font-size: 18px; font-weight: 700; color: #38bdf8; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+        .section { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #94a3b8; }
+
+        .btn { background: #38bdf8; color: #0f172a; border: none; padding: 10px 24px; border-radius: 8px;
+               font-size: 14px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+        .btn:hover { background: #7dd3fc; }
+        .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+        .form-group { display: flex; gap: 16px; flex-wrap: wrap; align-items: end; margin-bottom: 16px; }
+        .form-group label { display: block; font-size: 12px; color: #64748b; margin-bottom: 4px; }
+        .form-group input { background: #0f172a; border: 1px solid #334155; color: #e2e8f0; padding: 8px 12px;
+                            border-radius: 6px; font-size: 13px; width: 180px; }
+        .form-group input:focus { outline: none; border-color: #38bdf8; }
+
+        .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+        .card { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 16px; text-align: center; }
+        .card .label { font-size: 11px; color: #64748b; text-transform: uppercase; }
+        .card .value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+        .card .sub { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+        .positive { color: #ef4444; }
+        .negative { color: #22c55e; }
+
+        .chart-container { height: 300px; margin-top: 12px; }
+        .loading { text-align: center; padding: 40px; color: #64748b; }
+        .loading .spinner { width: 32px; height: 32px; border: 3px solid #334155; border-top-color: #38bdf8;
+                            border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px 12px; font-size: 12px; border-bottom: 1px solid #1e293b; }
+        th { color: #64748b; font-weight: 500; font-size: 11px; }
+    </style>
+</head>
+<body>
+<div class="nav">
+    <span class="title">📈 交易系统</span>
+    <a href="/">仪表盘</a>
+    <a href="/screen">选股</a>
+    <a href="/account">账户</a>
+    <a href="/backtest" class="active">回测</a>
+</div>
+<div class="container">
+
+    <div class="section">
+        <div class="section-title">📊 策略回测</div>
+        <form id="backtestForm">
+            <div class="form-group">
+                <div>
+                    <label>股票代码（逗号分隔）</label>
+                    <input type="text" name="codes" value="600519,000858,300750,601318,600036" style="width:320px;">
+                </div>
+                <div>
+                    <label>开始日期</label>
+                    <input type="text" name="start" value="2025-06-01">
+                </div>
+                <div>
+                    <label>短期均线</label>
+                    <input type="number" name="fast_ma" value="5">
+                </div>
+                <div>
+                    <label>长期均线</label>
+                    <input type="number" name="slow_ma" value="20">
+                </div>
+                <div>
+                    <button type="submit" class="btn" style="margin-top:18px;">🚀 运行回测</button>
+                </div>
+            </div>
+        </form>
+
+        <div id="loadingDiv" class="loading" style="display:none;">
+            <div class="spinner"></div>
+            <div>回测运行中，请稍候...</div>
+        </div>
+
+        <div id="resultArea" style="display:none;">
+            <div class="cards" id="summaryCards"></div>
+            <div class="chart-container"><canvas id="navChart"></canvas></div>
+        </div>
+
+        <div id="errorMsg" style="display:none;text-align:center;padding:20px;color:#ef4444;"></div>
+    </div>
+</div>
+
+<script>
+let navChart = null;
+
+document.getElementById('backtestForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const btn = form.querySelector('button');
+    const loading = document.getElementById('loadingDiv');
+    const resultArea = document.getElementById('resultArea');
+    const errorMsg = document.getElementById('errorMsg');
+    const summaryCards = document.getElementById('summaryCards');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ 运行中...';
+    loading.style.display = 'block';
+    resultArea.style.display = 'none';
+    errorMsg.style.display = 'none';
+
+    const params = new URLSearchParams();
+    params.append('codes', form.codes.value);
+    params.append('start', form.start.value);
+    params.append('fast_ma', form.fast_ma.value);
+    params.append('slow_ma', form.slow_ma.value);
+
+    try {
+        const resp = await fetch('/api/backtest/run?' + params.toString(), { method: 'POST' });
+        const data = await resp.json();
+
+        loading.style.display = 'none';
+        btn.disabled = false;
+        btn.textContent = '🚀 运行回测';
+
+        if (data.error) {
+            errorMsg.textContent = '❌ ' + data.error;
+            errorMsg.style.display = 'block';
+            return;
+        }
+
+        // 汇总卡片
+        resultArea.style.display = 'block';
+        summaryCards.innerHTML = `
+            <div class="card"><div class="label">总收益率</div>
+                <div class="value ${data.total_return_pct >= 0 ? 'positive' : 'negative'}">
+                    ${data.total_return_pct >= 0 ? '+' : ''}${data.total_return_pct.toFixed(2)}%
+                </div>
+            </div>
+            <div class="card"><div class="label">年化收益</div>
+                <div class="value ${data.annual_return_pct >= 0 ? 'positive' : 'negative'}">
+                    ${data.annual_return_pct.toFixed(2)}%
+                </div>
+            </div>
+            <div class="card"><div class="label">最大回撤</div>
+                <div class="value negative">${data.max_drawdown.toFixed(2)}%</div>
+            </div>
+            <div class="card"><div class="label">胜率</div>
+                <div class="value">${data.win_rate.toFixed(1)}%</div>
+            </div>
+            <div class="card"><div class="label">夏普比率</div>
+                <div class="value">${data.sharpe_ratio.toFixed(2)}</div>
+            </div>
+            <div class="card"><div class="label">交易次数</div>
+                <div class="value">${data.total_trades}</div>
+                <div class="sub">买${data.total_buys} 卖${data.total_sells}</div>
+            </div>
+        `;
+
+        // 净值曲线
+        if (navChart) navChart.destroy();
+        const nav = data.daily_nav || [];
+        const ctx = document.getElementById('navChart').getContext('2d');
+        navChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: nav.map(d => d.date.slice(5)),
+                datasets: [{
+                    label: '总资产',
+                    data: nav.map(d => d.total_equity),
+                    borderColor: '#38bdf8',
+                    backgroundColor: 'rgba(56, 189, 248, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                    pointRadius: 0,
+                    borderWidth: 2,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { labels: { color: '#94a3b8' } }
+                },
+                scales: {
+                    x: { ticks: { color: '#64748b', maxTicksLimit: 12 } },
+                    y: { ticks: { color: '#64748b', callback: v => '¥' + v.toLocaleString() } }
+                }
+            }
+        });
+
+    } catch (err) {
+        loading.style.display = 'none';
+        btn.disabled = false;
+        btn.textContent = '🚀 运行回测';
+        errorMsg.textContent = '❌ 请求失败: ' + err.message;
+        errorMsg.style.display = 'block';
+    }
+});
+</script>
+</body>
+</html>

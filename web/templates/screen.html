@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>选股 - A股交易系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+        .nav { background: #1e293b; padding: 12px 24px; display: flex; gap: 24px; align-items: center;
+               border-bottom: 1px solid #334155; }
+        .nav a { color: #94a3b8; text-decoration: none; font-size: 14px; padding: 6px 12px;
+                 border-radius: 6px; transition: all 0.2s; }
+        .nav a:hover, .nav a.active { background: #334155; color: #fff; }
+        .nav .title { font-size: 18px; font-weight: 700; color: #38bdf8; }
+        .container { max-width: 1300px; margin: 0 auto; padding: 24px; }
+        .section { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; color: #94a3b8; display:flex; justify-content:space-between; align-items:center; }
+        .btn { background: #38bdf8; color: #0f172a; border: none; padding: 8px 18px; border-radius: 8px;
+               font-size: 13px; font-weight: 600; cursor: pointer; }
+        .btn:hover { background: #7dd3fc; }
+        .btn:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+        .btn-sm { padding: 4px 12px; font-size: 12px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 8px 10px; font-size: 13px; border-bottom: 1px solid #1e293b; }
+        th { color: #64748b; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+        td { color: #cbd5e1; }
+        tr:hover { background: #0f172a; }
+        .positive { color: #ef4444; }
+        .negative { color: #22c55e; }
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
+        .badge-buy { background: rgba(34,197,94,0.15); color: #22c55e; }
+        .badge-watch { background: rgba(251,191,36,0.15); color: #fbbf24; }
+        .badge-tech { background: rgba(96,165,250,0.15); color: #60a5fa; }
+        .loading { text-align: center; padding: 40px; color: #64748b; }
+        .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+        select { background: #0f172a; color: #e2e8f0; border: 1px solid #334155; padding: 6px 12px; border-radius: 6px; font-size: 13px; }
+    </style>
+</head>
+<body>
+<div class="nav">
+    <span class="title">📈 交易系统</span>
+    <a href="/">仪表盘</a>
+    <a href="/screen" class="active">选股</a>
+    <a href="/account">账户</a>
+    <a href="/backtest">回测</a>
+</div>
+<div class="container">
+
+    <div class="section">
+        <div class="section-title">
+            <span>🔍 盘前选股结果</span>
+            <span style="display:flex;gap:8px;">
+                {% if dates %}
+                <select id="dateSelect" onchange="loadHistory(this.value)">
+                    {% for d in dates %}
+                    <option value="{{ d }}" {% if d == latest_date %}selected{% endif %}>{{ d }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+                <button class="btn btn-sm" id="runBtn" onclick="runNewScreen()" title="全市场扫描约1-2分钟">🔄 重新选股</button>
+            </span>
+        </div>
+
+        <div id="statusBar" style="margin-bottom:12px;font-size:13px;color:#64748b;">
+            {% if latest_date %}
+            📅 {{ latest_date }} · 共 {{ total_records }} 只入选
+            {% else %}
+            暂无选股记录，点击"重新选股"开始
+            {% endif %}
+        </div>
+
+        <div id="loadingDiv" class="loading" style="display:none;">
+            <div style="font-size:24px;margin-bottom:8px;">⏳</div>
+            <div>正在全市场扫描中，约需1-2分钟...</div>
+        </div>
+
+        {% if records %}
+        <table id="resultTable">
+            <thead>
+                <tr>
+                    <th>评分</th>
+                    <th>代码</th>
+                    <th>名称</th>
+                    <th>价格</th>
+                    <th>涨跌%</th>
+                    <th>趋势</th>
+                    <th>量比</th>
+                    <th>信号</th>
+                    <th>概念</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in records %}
+                {% set is_buy = r.get('signal_type') == 'buy' %}
+                {% set is_tech = r.get('extra', '') and '十五五' in r.get('strategies', '') %}
+                <tr>
+                    <td><strong style="color:{% if r.score >= 4 %}#22c55e{% elif r.score >= 2 %}#fbbf24{% else %}#94a3b8{% endif %}">{{ "%.1f"|format(r.score) }}</strong></td>
+                    <td><strong>{{ r.code }}</strong></td>
+                    <td>{{ r.name or '-' }}</td>
+                    <td>¥{{ "%.2f"|format(r.price) }}</td>
+                    <td><span class="{% if r.pct_change >= 0 %}positive{% else %}negative{% endif %}">{{ "%+.2f"|format(r.pct_change) }}%</span></td>
+                    <td>{{ r.trend or '-' }}</td>
+                    <td>{{ r.vol_ratio or '-' }}</td>
+                    <td>
+                        <span class="badge {% if is_buy %}badge-buy{% else %}badge-watch{% endif %}">
+                            {{ '🏆 buy' if is_buy else '👀 watch' }}
+                        </span>
+                        {% if is_tech %}<span class="badge badge-tech">十五五</span>{% endif %}
+                    </td>
+                    <td style="color:#64748b;font-size:12px;max-width:300px;overflow:hidden;text-overflow:ellipsis;">{{ r.get('strategies', '') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div style="text-align:center;padding:40px;color:#64748b;">
+            <div style="font-size:40px;margin-bottom:12px;">📭</div>
+            <div>暂无选股记录</div>
+            <div style="font-size:13px;margin-top:8px;">点击右上角"重新选股"运行全市场扫描</div>
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+<script>
+async function loadHistory(date) {
+    window.location.href = '/screen?date=' + date;
+}
+
+async function runNewScreen() {
+    const btn = document.getElementById('runBtn');
+    const loading = document.getElementById('loadingDiv');
+    btn.disabled = true;
+    btn.textContent = '⏳ 扫描中...';
+    loading.style.display = 'block';
+
+    try {
+        const resp = await fetch('/api/screen/run');
+        const data = await resp.json();
+        if (data.stocks) {
+            window.location.reload();
+        } else {
+            alert('选股完成但无结果，可能是行情数据问题');
+        }
+    } catch (err) {
+        alert('选股失败: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 重新选股';
+        loading.style.display = 'none';
+    }
+}
+</script>
+</body>
+</html>

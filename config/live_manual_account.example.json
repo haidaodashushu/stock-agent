@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "mode": "live_shadow",
+  "initial_cash": 20000,
+  "capital_flows": [],
+  "target_position_amount": 10000,
+  "min_cash_reserve": 2000,
+  "min_lot": 100,
+  "max_positions": null,
+  "max_single_buy_amount": null,
+  "max_decision_price_drift_pct": 2.0,
+  "default_buy_price_buffer_pct": 0.5,
+  "blocked_boards": ["300", "301", "688", "8", "4"],
+  "strategy_policy": "Replace this with your own live-shadow account policy.",
+  "notes": [
+    "This ledger does not connect to a broker or place real orders.",
+    "Record deposits and withdrawals in capital_flows instead of changing initial_cash."
+  ]
+}

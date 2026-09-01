@@ -1,0 +1,61 @@
+# Python/runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Local process state
+.run/
+*.pid
+*.lock
+
+# Databases and generated data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/*.db
+data/*.sqlite*
+data/reports/
+data/cache/
+data/runtime/
+data/agent_runs/
+
+# Logs, snapshots, and operational memory
+logs/
+memory/
+monitoring/
+analysis/
+
+# Backups and packaged exports
+backups/
+dist/
+*.bak
+*.bak*
+*.backup
+*.tar
+*.tar.*
+*.zst
+
+# Secrets and local env
+.env
+.env.*
+config/runtime.local.json
+config/*.local.json
+*secret*
+*secrets*
+*token*
+*key*
+*.pem
+*.key
+
+# Temporary downloads
+temp_download/
+
+# Editor/OS noise
+.DS_Store
+*.swp
+*.swo

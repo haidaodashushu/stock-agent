@@ -1,0 +1,13 @@
+{
+  "market": "A股",
+  "timezone": "Asia/Shanghai",
+  "holidays": {
+    "2026-06-19": "端午节休市"
+  },
+  "trading_days": {},
+  "notes": [
+    "周六日默认休市，除非写入 trading_days。",
+    "法定节假日/临时休市写入 holidays。",
+    "交易流水线脚本必须先调用 data.market_calendar.ensure_market_open。"
+  ]
+}

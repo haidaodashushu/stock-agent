@@ -1,0 +1,19 @@
+{
+  "feishu": {
+    "target_kind": "chat",
+    "target_id": "oc_replace_with_chat_id",
+    "profile": "stock",
+    "receive": {
+      "enabled": false,
+      "allowed_sender_ids": ["ou_replace_with_user_open_id"],
+      "ack_emoji": "OnIt",
+      "agent_enabled": true,
+      "agent_timeout_seconds": 600,
+      "max_workers": 2
+    }
+  },
+  "agent": {
+    "provider": "codex-cli",
+    "model": "gpt-5.6-sol"
+  }
+}
