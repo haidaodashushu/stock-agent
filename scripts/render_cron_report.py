@@ -501,21 +501,57 @@ def render_presentation(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def render_markdown(report: dict[str, Any]) -> str:
+    """Render the same report as portable Markdown for non-Lark channels."""
+    if report.get("profile") == "screening_report":
+        lines = [f"## {report_title(report)}", ""]
+        summary = as_text(report.get("summary")).replace("。；", "；")
+        if summary:
+            lines.extend([summary, ""])
+        for rank, item in enumerate(normalize_items(report.get("candidates"))[:10], 1):
+            lines.extend([
+                f"**{rank}. {as_text(item.get('code')).zfill(6)} {as_text(item.get('name'))}**"
+                f"｜评分 {as_text(item.get('score'), '0')}｜{as_text(item.get('ai_confidence'), '-')}"
+            ])
+            reason = as_text(item.get("ai_reason"), "暂无独立 AI 入选说明")
+            risk = as_text(item.get("ai_risk"), "暂无独立风险说明")
+            lines.extend([f"> 入选：{reason}", f"> 风险：{risk}", ""])
+        run = report.get("run") if isinstance(report.get("run"), dict) else {}
+        lines.append(f"数据日期：{as_text(run.get('run_date'), '-')}")
+        warnings = normalize_strings(report.get("warnings"))
+        lines.append(warnings[0] if warnings else "预选结果不等于交易指令。")
+        return "\n".join(lines).strip()
+
+    lines = [f"## {report_title(report)}"]
+    for block in build_blocks(report):
+        if block.get("type") == "divider":
+            lines.append("---")
+        elif block.get("type") == "text" and block.get("text"):
+            lines.append(str(block["text"]))
+    return "\n\n".join(lines)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", required=True)
-    parser.add_argument("--presentation-out", required=True)
+    parser.add_argument("--presentation-out")
+    parser.add_argument("--markdown-out")
     args = parser.parse_args()
+    if not args.presentation_out and not args.markdown_out:
+        parser.error("at least one of --presentation-out or --markdown-out is required")
 
     report_path = Path(args.report)
     report = json.loads(report_path.read_text(encoding="utf-8"))
     if not isinstance(report, dict):
         raise SystemExit("report root must be a JSON object")
 
-    Path(args.presentation_out).write_text(
-        json.dumps(render_presentation(report), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    if args.presentation_out:
+        Path(args.presentation_out).write_text(
+            json.dumps(render_presentation(report), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if args.markdown_out:
+        Path(args.markdown_out).write_text(render_markdown(report) + "\n", encoding="utf-8")
     return 0
 
 

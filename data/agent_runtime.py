@@ -3,11 +3,48 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+
+PROXY_KEYS = {
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+}
+
+
+def codex_environment() -> dict[str, str]:
+    """Build an environment where only the Codex subprocess receives proxy vars."""
+    inherited = dict(os.environ)
+    fallback = {key: inherited[key] for key in PROXY_KEYS if inherited.get(key)}
+    for key in PROXY_KEYS:
+        inherited.pop(key, None)
+    path = Path(
+        os.environ.get("STOCK_PROXY_ENV_FILE") or Path.home() / ".proxy_env"
+    ).expanduser()
+    loaded: dict[str, str] = {}
+    if path.is_file():
+        for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            if "=" not in line:
+                continue
+            key, raw_value = line.split("=", 1)
+            key = key.strip()
+            if key not in PROXY_KEYS:
+                continue
+            values = shlex.split(raw_value.strip(), posix=True)
+            if values:
+                loaded[key] = values[0]
+    inherited.update(loaded or fallback)
+    return inherited
 
 
 @dataclass(frozen=True)
@@ -33,6 +70,7 @@ class CodexCliProvider:
         model: str | None = None,
         timeout_seconds: int = 900,
         sandbox: str = "read-only",
+        ephemeral: bool = True,
     ) -> None:
         requested = executable or os.environ.get("STOCK_AGENT_CODEX_BIN") or "codex"
         resolved = shutil.which(requested) if not Path(requested).is_absolute() else requested
@@ -50,6 +88,7 @@ class CodexCliProvider:
         if sandbox not in {"read-only", "workspace-write"}:
             raise ValueError(f"unsupported Codex sandbox: {sandbox}")
         self.sandbox = sandbox
+        self.ephemeral = bool(ephemeral)
 
     def build_command(
         self,
@@ -59,14 +98,21 @@ class CodexCliProvider:
         mcp_command: str | None = None,
         mcp_args: Sequence[str] = (),
         output_schema_path: Path | None = None,
+        resume_session_id: str = "",
+        image_paths: Sequence[Path] = (),
     ) -> list[str]:
         # JSON string/array syntax is valid TOML and avoids shell interpolation.
         command = [
             self.executable,
             "exec",
+        ]
+        if resume_session_id:
+            if mcp_command:
+                raise ValueError("MCP overrides are not supported when resuming a Codex session")
+            command.append("resume")
+        command.extend([
             "--ignore-user-config",
             "--ignore-rules",
-            "--ephemeral",
             # Scheduled stock decisions need exactly one project-local MCP.
             # Keep account-level Apps/plugins and interactive agent surfaces
             # out of the unattended process: besides reducing the tool attack
@@ -86,10 +132,6 @@ class CodexCliProvider:
             "image_generation",
             "--disable",
             "multi_agent",
-            "--sandbox",
-            self.sandbox,
-            "--cd",
-            str(workspace.resolve()),
             "--model",
             self.model,
             "--json",
@@ -97,9 +139,20 @@ class CodexCliProvider:
             str(final_message_path.resolve()),
             "--config",
             'approval_policy="never"',
-        ]
+        ])
+        if not resume_session_id:
+            if self.ephemeral:
+                command.append("--ephemeral")
+            command.extend([
+                "--sandbox",
+                self.sandbox,
+                "--cd",
+                str(workspace.resolve()),
+            ])
         if output_schema_path is not None:
             command.extend(["--output-schema", str(output_schema_path.resolve())])
+        for image_path in image_paths:
+            command.extend(["--image", str(image_path.resolve())])
         if mcp_command:
             command.extend([
                 "--config",
@@ -119,7 +172,10 @@ class CodexCliProvider:
                     "--config",
                     f"mcp_servers.stock_agent.env.STOCK_DB_PATH={json.dumps(db_path)}",
                 ])
-        command.append("-")
+        if resume_session_id:
+            command.extend([resume_session_id, "-"])
+        else:
+            command.append("-")
         return command
 
     def run(
@@ -131,18 +187,23 @@ class CodexCliProvider:
         mcp_command: str | None = None,
         mcp_args: Sequence[str] = (),
         output_schema_path: Path | None = None,
+        resume_session_id: str = "",
+        image_paths: Sequence[Path] = (),
     ) -> AgentRunResult:
         run_dir.mkdir(parents=True, exist_ok=True)
         final_path = run_dir / "final-message.txt"
         command = self.build_command(
             workspace=workspace, mcp_command=mcp_command, mcp_args=mcp_args,
             final_message_path=final_path, output_schema_path=output_schema_path,
+            resume_session_id=resume_session_id,
+            image_paths=image_paths,
         )
         try:
             completed = subprocess.run(
                 command,
                 input=prompt,
                 cwd=workspace,
+                env=codex_environment(),
                 text=True,
                 capture_output=True,
                 timeout=self.timeout_seconds,

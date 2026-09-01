@@ -1,4 +1,8 @@
 {
+  "messaging": {
+    "provider": "feishu",
+    "mention_all_on_push": true
+  },
   "feishu": {
     "target_kind": "chat",
     "target_id": "oc_replace_with_chat_id",
@@ -11,6 +15,33 @@
       "agent_timeout_seconds": 600,
       "max_workers": 2
     }
+  },
+  "wecom": {
+    "corp_id": "ww_replace_with_corp_id",
+    "agent_id": 1000002,
+    "secret": "replace_with_app_secret",
+    "token": "replace_with_callback_token",
+    "encoding_aes_key": "replace_with_43_character_callback_aes_key",
+    "callback_enabled": true,
+    "allow_all_users": false,
+    "allowed_user_ids": ["replace_with_wecom_user_id"],
+    "admin_user_ids": ["replace_with_admin_wecom_user_id"],
+    "group_chat_id": "",
+    "agent_enabled": true,
+    "agent_timeout_seconds": 600
+  },
+  "wecom_aibot": {
+    "bot_id": "replace_with_intelligent_robot_bot_id",
+    "secret": "replace_with_intelligent_robot_secret",
+    "allow_all_users": true,
+    "allowed_user_ids": [],
+    "admin_user_ids": ["replace_with_admin_wecom_user_id"],
+    "capture_first_group_chat": true,
+    "group_chat_id": "",
+    "bridge_host": "127.0.0.1",
+    "bridge_port": 8898,
+    "agent_enabled": true,
+    "agent_timeout_seconds": 600
   },
   "agent": {
     "provider": "codex-cli",

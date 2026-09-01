@@ -116,6 +116,66 @@ scripts/stock_agent_trading_cycle.sh live
 scripts/stock_scheduled_job.sh nightly-update
 ```
 
+### Enterprise WeChat self-built application
+
+Set `messaging.provider` to `wecom` in `config/runtime.local.json`, then fill
+the `wecom` block from `config/runtime.example.json`. Configure the self-built
+application callback as:
+
+```text
+https://your-public-host/api/wecom/callback
+```
+
+Enter the same callback `token` and `encoding_aes_key` in the Enterprise
+WeChat admin console. Add the server's outbound public IP to the application's
+trusted IP list. Set `allow_all_users` to `true` to accept messages from every
+member in the application's Enterprise WeChat visibility scope; otherwise only
+members explicitly listed in `allowed_user_ids` are processed. Members in
+`admin_user_ids` may perform write operations; all other members run in a
+read-only sandbox and cannot submit live fills. The
+public Web live-fill/status endpoints are deliberately disabled, so remote live
+updates must come from an authorized WeCom admin. Scheduled outbox delivery follows `messaging.provider`, while the
+existing Feishu configuration may remain in the local file for rollback.
+
+Reports stored in `agent_message_outbox` are channel-neutral. The delivery
+adapter renders the same report at send time: `wecom_aibot` receives native
+Markdown (and may use `messaging.mention_all_on_push`), while `feishu` receives
+a schema 2.0 interactive card. Business jobs and Agent submission code must not
+contain channel-specific formatting. To switch outbound delivery, change only
+`messaging.provider`; credentials for the inactive adapter can stay configured.
+Inbound listeners are independent services: enable either
+`stock-wecom-aibot.service` or `stock-feishu-listener.service` after its own
+preflight, rather than coupling listener lifecycle to scheduled jobs. Both
+listeners write the channel-neutral `bot_inbound_messages` ledger using distinct
+message ID prefixes.
+
+For an intelligent robot, use the `wecom_aibot` block and run the long-lived
+`stock-wecom-aibot.service`. It connects outbound through the official
+WebSocket channel, accepts private messages and group mentions, and captures
+the first group conversation as the scheduled-report target. After that target
+is verified, change `messaging.provider` to `wecom_aibot`; the loopback delivery
+bridge listens only on `127.0.0.1`.
+Set the legacy `wecom.callback_enabled` to `false` after the intelligent robot
+has passed both inbound and proactive-send verification.
+
+Every private user has an isolated persistent Codex session. Group context is
+also isolated by group and sender so a writable administrator session is never
+shared with a read-only member. Send `/new` in a private chat (or mention the
+robot with `/new` in a group) to discard the current logical session and start
+fresh on the next message. Non-admin members may ask about any topic, while the
+runtime keeps their tool execution read-only and rejects live-fill writes before
+the model is invoked. Permission language is returned only when a write request
+is actually denied; ordinary answers do not repeat role or access notices.
+
+In groups, each sender keeps a separate Codex session, while recent public
+questions and answers that actually reached the robot are supplied as shared
+group context. Enterprise WeChat only pushes group interactions that mention
+the robot, so unrelated group history is not available. Native quoted messages
+are expanded from the callback `quote` field; quoted/current images and mixed
+text-image messages are downloaded, decrypted and attached to the Codex turn.
+The loopback `/send` bridge accepts either Markdown `content` or a native
+`template_card` object for proactive group delivery.
+
 The supplied crontab is a template containing `{{STOCK_ROOT}}`; do not install
 it verbatim. Existing scheduler migration and rollback instructions are in
 [`docs/codex-agent-runtime.md`](docs/codex-agent-runtime.md).

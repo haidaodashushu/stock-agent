@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Send one prepared stock-system message through the configured provider."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from config.runtime_paths import configurable_path  # noqa: E402
+from data.message_delivery import send_configured_message  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True, type=Path)
+    parser.add_argument("--message-type", choices=("text", "interactive"), default="text")
+    parser.add_argument("--idempotency-key", default="")
+    parser.add_argument(
+        "--config",
+        default=str(configurable_path("STOCK_RUNTIME_CONFIG", "config/runtime.local.json")),
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    content = args.file.read_text(encoding="utf-8")
+    key = args.idempotency_key or hashlib.sha256(content.encode()).hexdigest()[:32]
+    send_configured_message(
+        config_path=Path(args.config),
+        content=content,
+        message_type=args.message_type,
+        idempotency_key=key,
+        dry_run=args.dry_run,
+    )
+    print(json.dumps({"status": "dry-run" if args.dry_run else "sent"}))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

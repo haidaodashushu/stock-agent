@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>{{ report.title }} · 搅市的棍</title>
+  <style>
+    :root{--green:#20a866;--green-dark:#15794c;--green-pale:#edf9f1;--ink:#202124;--muted:#66706b;--line:#e5e9e6;--paper:#fff}
+    *{box-sizing:border-box} body{margin:0;background:#f4f6f5;color:var(--ink);font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+    .page{max-width:1080px;margin:22px auto 44px;background:var(--paper);border:1px solid #e1e6e3;border-radius:10px;box-shadow:0 4px 18px rgba(20,50,35,.05);overflow:hidden}
+    .header{display:flex;align-items:center;gap:10px;padding:13px 18px;background:linear-gradient(100deg,#ddf8e6,#edfae8);color:var(--green-dark);font-size:16px;font-weight:700}
+    .header .mark{font-size:18px}.done{font-size:11px;font-weight:600;padding:1px 7px;border-radius:9px;background:#c7efd5;color:#2c8759}
+    main{padding:14px 18px 28px}.section{margin-top:18px}.section-title{font-size:15px;font-weight:750;margin:0 0 8px}
+    .conclusion{padding:14px 15px;background:linear-gradient(105deg,#eaf9eb,#f3fbef);border-radius:8px;line-height:1.65}
+    .overview{margin:0;padding-left:22px}.overview li{padding:1px 0}.overview li::marker,.reasons li::marker{color:#408cff}
+    .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}table{width:100%;border-collapse:collapse;min-width:790px;font-size:14px}
+    th,td{text-align:left;padding:9px 10px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);vertical-align:top}th:last-child,td:last-child{border-right:0}tbody tr:last-child td{border-bottom:0}
+    th{font-weight:700;background:#fbfcfb;white-space:nowrap}.code{font-variant-numeric:tabular-nums}.up{color:#d94a45}.down{color:#15965d}.tags{color:#4f5853;line-height:1.45}
+    .reasons{margin:0;padding-left:22px}.reasons li{padding:4px 0 6px}.stock{font-weight:750}.confidence{font-weight:500;color:var(--muted)}.risk{color:#5d6561}
+    .note{color:#4d5651}.source{margin-top:10px;color:#818985;font-size:13px}.empty{padding:60px 20px;text-align:center;color:var(--muted)}
+    @media(max-width:680px){body{background:#fff;font-size:14px}.page{margin:0;border:0;border-radius:0;box-shadow:none}.header{padding:12px 14px}main{padding:10px 14px 24px}.section{margin-top:16px}.conclusion{padding:12px}.table-wrap{margin-left:-14px;margin-right:-14px;border-left:0;border-right:0;border-radius:0}table{font-size:13px}th,td{padding:8px}.reasons{padding-left:19px}}
+  </style>
+</head>
+<body>
+  <article class="page">
+    {% if report %}
+    <header class="header"><span class="mark">📈</span><span>{{ report.title }}</span><span class="done">完成</span></header>
+    <main>
+      <section class="conclusion"><div class="section-title">选股结论</div>{{ report.summary }}</section>
+      {% set run = report.run or {} %}
+      <section class="section">
+        <h2 class="section-title">本轮概览</h2>
+        <ul class="overview">
+          <li>目标交易日：{{ run.run_date or '-' }}</li>
+          <li>候选：{{ run.count or 0 }}只</li>
+          <li>buy/watch：{{ run.buy_count or 0 }} / {{ run.watch_count or 0 }}</li>
+          <li>科技主线：{{ run.tech_count or 0 }}只</li>
+          <li>强逻辑变化：{{ run.strong_logic_count or 0 }}只</li>
+          <li>主线：{{ run.mainline_text or '无明显集中主线' }}</li>
+        </ul>
+      </section>
+      <section class="section">
+        <h2 class="section-title">TOP 候选</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>代码</th><th>名称</th><th>评分</th><th>趋势</th><th>涨跌</th><th>量比</th><th>标签</th></tr></thead>
+          <tbody>{% for item in report.candidates %}<tr>
+            <td class="code">{{ item.code }}</td><td>{{ item.name }}</td><td>{{ item.score }}</td><td>{{ item.trend or '-' }}</td>
+            <td class="{{ 'up' if (item.pct_change or 0) > 0 else 'down' if (item.pct_change or 0) < 0 else '' }}">{{ '%+.1f%%'|format(item.pct_change or 0) }}</td>
+            <td>{{ item.vol_ratio or '-' }}</td><td class="tags">{{ (item.tags or [])|join(',') }}{% if item.logic_level %}，逻辑:{{ item.logic_level }}{% endif %}</td>
+          </tr>{% endfor %}</tbody>
+        </table></div>
+      </section>
+      <section class="section">
+        <h2 class="section-title">AI 入选依据</h2>
+        <ul class="reasons">{% for item in report.candidates if item.ai_reason %}
+          <li><span class="stock">{{ item.code }} {{ item.name }}</span> <span class="confidence">({{ item.ai_confidence or 'weak' }})</span>：{{ item.ai_reason }}{% if item.ai_risk %} <span class="risk">风险：{{ item.ai_risk }}</span>{% endif %}</li>
+        {% endfor %}</ul>
+      </section>
+      {% if report.warnings %}<section class="section note"><h2 class="section-title">说明</h2><ul class="overview">{% for item in report.warnings %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+      {% if report.data_notes %}<section class="section note"><h2 class="section-title">数据说明</h2><ul class="overview">{% for item in report.data_notes %}<li>{{ item }}</li>{% endfor %}</ul></section>{% endif %}
+      {% if report.source %}<div class="source">来源：{{ report.source }}</div>{% endif %}
+    </main>
+    {% else %}<div class="empty">暂无选股报告</div>{% endif %}
+  </article>
+</body>
+</html>

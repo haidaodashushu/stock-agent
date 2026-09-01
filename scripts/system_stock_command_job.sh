@@ -5,7 +5,7 @@ set -o pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT/logs/system_cron/command_jobs"
 RUN_DIR="$ROOT/.run"
-PYTHON_BIN="${STOCK_CRON_PYTHON:-/usr/bin/python3}"
+PYTHON_BIN="${STOCK_CRON_PYTHON:-$ROOT/.venv/bin/python}"
 
 JOB_NAME="${1:-}"
 if [[ -z "$JOB_NAME" ]]; then
@@ -22,7 +22,6 @@ LOG_FILE="$LOG_DIR/${SAFE_NAME}_${RUN_ID}.log"
 LATEST_LOG="$LOG_DIR/${SAFE_NAME}_latest.log"
 MSG_FILE="$LOG_DIR/${SAFE_NAME}_${RUN_ID}.message.txt"
 REPORT_FILE="$LOG_DIR/${SAFE_NAME}_${RUN_ID}.report.json"
-PRESENTATION_FILE="$LOG_DIR/${SAFE_NAME}_${RUN_ID}.presentation.json"
 LOCK_FILE="$RUN_DIR/system_command_${SAFE_NAME}.lock"
 REPORT_PROFILE="plain_text"
 
@@ -31,20 +30,20 @@ notify() {
   if [[ "${STOCK_CRON_NO_NOTIFY:-0}" == "1" ]]; then
     return 0
   fi
-  "$ROOT/.venv/bin/python" scripts/send_feishu_message.py \
+  "$ROOT/.venv/bin/python" scripts/send_configured_message.py \
     --file "$message_file" --message-type text \
     --idempotency-key "${SAFE_NAME}_${RUN_ID}_text" \
     >>"$LOG_FILE" 2>&1 || true
 }
 
-send_card_report() {
-  local card_file="$1"
+send_report() {
+  local report_file="$1"
   if [[ "${STOCK_CRON_NO_NOTIFY:-0}" == "1" ]]; then
     return 0
   fi
-  "$ROOT/.venv/bin/python" scripts/send_feishu_message.py \
-    --file "$card_file" --message-type interactive \
-    --idempotency-key "${SAFE_NAME}_${RUN_ID}_card" \
+  "$ROOT/.venv/bin/python" scripts/send_configured_message.py \
+    --file "$report_file" --message-type interactive \
+    --idempotency-key "${SAFE_NAME}_${RUN_ID}_report" \
     >>"$LOG_FILE" 2>&1
 }
 
@@ -324,7 +323,7 @@ else:
     lines.extend(["", "脚本无输出。"])
 if not should_notify and rc == 0:
     lines.append("")
-    lines.append("本轮为常规成功采集，默认不推送飞书。")
+    lines.append("本轮为常规成功采集，默认不推送消息。")
 
 Path(msg_path).write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 print("1" if should_notify else "0")
@@ -332,15 +331,12 @@ PY
 )"
 
 if [[ "$SHOULD_NOTIFY" == "1" ]]; then
-  if [[ "$REPORT_PROFILE" != "plain_text" && -s "$REPORT_FILE" ]] && "$PYTHON_BIN" scripts/render_cron_report.py \
-    --report "$REPORT_FILE" \
-    --presentation-out "$PRESENTATION_FILE" \
-    >>"$LOG_FILE" 2>&1; then
-    if ! send_card_report "$PRESENTATION_FILE"; then
+  if [[ "$REPORT_PROFILE" != "plain_text" && -s "$REPORT_FILE" ]]; then
+    if ! send_report "$REPORT_FILE"; then
       {
-        echo "$JOB_NAME：飞书卡片发送失败"
+        echo "$JOB_NAME：报告消息发送失败"
         echo ""
-        echo "- 报告已正常生成，但卡片投递失败。"
+        echo "- 报告已正常生成，但当前消息渠道投递失败。"
         echo "- 时间：$(date '+%Y-%m-%d %H:%M:%S %z')"
         echo "- 日志：$LOG_FILE"
       } >"$MSG_FILE"

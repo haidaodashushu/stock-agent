@@ -5,9 +5,18 @@ from unittest.mock import patch
 
 from data.adapters import iwencai_credentials
 from data.adapters.iwencai_credentials import IwenCaiKeyring
+from data.adapters.iwencai_client import IwenCaiClient
 
 
 class IwenCaiKeyringTests(unittest.TestCase):
+    def test_client_loads_current_key_from_keyring_without_shell_profile(self):
+        with patch.object(
+            IwenCaiKeyring,
+            "candidates",
+            return_value=[("IWENCAI_API_KEY_CURRENT", "current-key")],
+        ):
+            self.assertEqual(IwenCaiClient.load_api_key(), "current-key")
+
     def test_candidates_prefer_profile_then_keyring(self):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)

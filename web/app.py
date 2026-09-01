@@ -11,8 +11,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import FastAPI, Request, Query, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import BackgroundTasks, FastAPI, Request, Query, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.templating import _TemplateResponse
 import jinja2
 
@@ -20,6 +20,7 @@ from account.trader import SimTrader
 from engine.screener import StockScreener
 from data.loader import DataLoader
 from data.store.sqlite_store import StockStore
+from data.selection_report import latest_selection_report
 from data.candidate_lifecycle import (
     load_lifecycle_snapshot,
     overlay_latest_candidate_quotes,
@@ -29,10 +30,12 @@ from account.reconcile import reconcile
 from data.watchlist_config import load_config as load_watchlist_config, upsert_item as upsert_watch_item, delete_item as delete_watch_item
 from data.live_manual_account import (
     account_snapshot as live_account_snapshot,
-    execution_deviation_warnings,
     expire_stale_proposed_intents,
 )
 from data.services.financial_analysis_service import FinancialAnalysisService, normalize_codes
+from config.runtime_paths import configurable_path
+from data.wecom_client import WeComClient, WeComCrypto, load_wecom_settings
+from data.wecom_inbound import handle_wecom_message, parse_wecom_xml
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +163,72 @@ async def index():
     html_path = os.path.join(os.path.dirname(__file__), "templates", "app.html")
     with open(html_path, "r", encoding="utf-8") as f:
         return HTMLResponse(f.read())
+
+
+@app.get("/reports/night-selection/latest", response_class=HTMLResponse)
+async def latest_night_selection_report(request: Request):
+    """Mobile-friendly rich report linked from WeCom cards."""
+    report = latest_selection_report(_store())
+    return render("selection_report.html", {"request": request, "report": report})
+
+
+def _wecom_runtime():
+    path = configurable_path("STOCK_RUNTIME_CONFIG", "config/runtime.local.json")
+    settings = load_wecom_settings(path)
+    return settings, WeComCrypto(
+        settings.token, settings.encoding_aes_key, settings.corp_id,
+    )
+
+
+@app.get("/api/wecom/callback", response_class=PlainTextResponse)
+async def verify_wecom_callback(
+    msg_signature: str,
+    timestamp: str,
+    nonce: str,
+    echostr: str,
+):
+    """Complete WeCom's one-time callback URL verification."""
+    settings, crypto = _wecom_runtime()
+    if not settings.callback_enabled:
+        raise HTTPException(status_code=410, detail="legacy WeCom callback is disabled")
+    try:
+        crypto.verify(msg_signature, timestamp, nonce, echostr)
+        return PlainTextResponse(crypto.decrypt(echostr))
+    except Exception as exc:
+        logger.warning("WeCom callback verification failed: %s", exc)
+        raise HTTPException(status_code=403, detail="invalid callback") from exc
+
+
+@app.post("/api/wecom/callback", response_class=PlainTextResponse)
+async def receive_wecom_callback(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    msg_signature: str,
+    timestamp: str,
+    nonce: str,
+):
+    """Authenticate an encrypted callback and process it after acknowledging."""
+    body = await request.body()
+    if not body or len(body) > 1024 * 1024:
+        raise HTTPException(status_code=400, detail="invalid callback body")
+    settings, crypto = _wecom_runtime()
+    if not settings.callback_enabled:
+        raise HTTPException(status_code=410, detail="legacy WeCom callback is disabled")
+    try:
+        envelope = parse_wecom_xml(body.decode("utf-8"))
+        encrypted = str(envelope.get("Encrypt") or "")
+        crypto.verify(msg_signature, timestamp, nonce, encrypted)
+        event = parse_wecom_xml(crypto.decrypt(encrypted))
+    except Exception as exc:
+        logger.warning("WeCom callback rejected: %s", exc)
+        raise HTTPException(status_code=403, detail="invalid callback") from exc
+    background_tasks.add_task(
+        handle_wecom_message,
+        event,
+        settings=settings,
+        client=WeComClient(settings),
+    )
+    return PlainTextResponse("success")
 
 # ============================================================
 # API: 账户 & 持仓
@@ -630,71 +699,21 @@ async def api_live_account():
 
 @app.post("/api/live-intents/{intent_id}/fill")
 async def api_live_intent_fill(intent_id: str, request: Request):
-    """用户手动成交后回填/修改成交。不会提交真实订单。"""
-    data = await request.json()
-    try:
-        price = round(float(data.get("price") or 0), 2)
-        volume = int(data.get("volume") or 0)
-    except Exception:
-        return JSONResponse({"ok": False, "message": "成交价格/数量格式错误"}, status_code=400)
-    if price <= 0 or volume <= 0:
-        return JSONResponse({"ok": False, "message": "成交价格和数量必须大于0"}, status_code=400)
-    amount = round(price * volume, 2)
-    store = _store()
-    conn = store._get_conn()
-    try:
-        row = conn.execute("SELECT * FROM live_trade_intents WHERE intent_id=?", (intent_id,)).fetchone()
-        if not row:
-            return JSONResponse({"ok": False, "message": "建议单不存在"}, status_code=404)
-        if row["status"] not in {"proposed", "filled"}:
-            return JSONResponse({"ok": False, "message": f"建议单状态为 {row['status']}，不能回填/修改成交"}, status_code=409)
-        warnings = execution_deviation_warnings(row, price, volume)
-        note = str(data.get("note") or "").strip()
-        if warnings:
-            warning_note = "执行偏离警告：" + "；".join(warnings)
-            note = f"{note}；{warning_note}" if note else warning_note
-        conn.execute(
-            """UPDATE live_trade_intents
-               SET status='filled', filled_price=?, filled_volume=?, filled_amount=?,
-                   filled_at=datetime('now','localtime'), user_note=?
-               WHERE intent_id=?""",
-            (price, volume, amount, note, intent_id),
-        )
-        conn.commit()
-        updated = conn.execute("SELECT * FROM live_trade_intents WHERE intent_id=?", (intent_id,)).fetchone()
-        return JSONResponse({
-            "ok": True,
-            "item": _live_intent_row_to_dict(updated),
-            "warnings": warnings,
-        })
-    finally:
-        conn.close()
+    """Disabled on Web: live fills are accepted only from an authorized WeCom admin."""
+    raise HTTPException(
+        status_code=403,
+        detail="实盘成交写入已关闭 Web 入口，请由管理员 WangZhengKui 通过企业微信应用提交。",
+    )
 
 
 @app.post("/api/live-intents/{intent_id}/status")
 async def api_live_intent_status(intent_id: str, request: Request):
-    """取消/拒绝/过期建议单。"""
-    data = await request.json()
-    status = data.get("status", "cancelled")
-    if status not in {"cancelled", "rejected", "expired"}:
-        return JSONResponse({"ok": False, "message": "状态只能是 cancelled/rejected/expired"}, status_code=400)
-    store = _store()
-    conn = store._get_conn()
-    try:
-        row = conn.execute("SELECT * FROM live_trade_intents WHERE intent_id=?", (intent_id,)).fetchone()
-        if not row:
-            return JSONResponse({"ok": False, "message": "建议单不存在"}, status_code=404)
-        if row["status"] != "proposed":
-            return JSONResponse({"ok": False, "message": f"建议单状态为 {row['status']}，不能修改"}, status_code=409)
-        conn.execute(
-            "UPDATE live_trade_intents SET status=?, user_note=? WHERE intent_id=?",
-            (status, data.get("note", ""), intent_id),
-        )
-        conn.commit()
-        updated = conn.execute("SELECT * FROM live_trade_intents WHERE intent_id=?", (intent_id,)).fetchone()
-        return JSONResponse({"ok": True, "item": _live_intent_row_to_dict(updated)})
-    finally:
-        conn.close()
+    """Disabled on Web: live status writes require an authorized WeCom admin."""
+    raise HTTPException(
+        status_code=403,
+        detail="实盘建议单状态修改已关闭 Web 入口，请由管理员 WangZhengKui 通过企业微信应用操作。",
+    )
+
 
 # ============================================================
 # API: 新闻监控

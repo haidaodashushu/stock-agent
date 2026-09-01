@@ -169,7 +169,7 @@ class FeishuInboundListenerTests(unittest.TestCase):
             try:
                 row = conn.execute(
                     "SELECT status,handler,ack_status,result,replied_at "
-                    "FROM feishu_inbound_messages"
+                    "FROM bot_inbound_messages"
                 ).fetchone()
             finally:
                 conn.close()
@@ -195,7 +195,7 @@ class FeishuInboundListenerTests(unittest.TestCase):
             self.assertEqual(calls, [])
             conn = store._get_conn()
             try:
-                count = conn.execute("SELECT COUNT(*) FROM feishu_inbound_messages").fetchone()[0]
+                count = conn.execute("SELECT COUNT(*) FROM bot_inbound_messages").fetchone()[0]
             finally:
                 conn.close()
             self.assertEqual(count, 0)

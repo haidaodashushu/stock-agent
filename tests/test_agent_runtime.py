@@ -5,21 +5,42 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from data.agent_runtime import AgentRunResult, CodexCliProvider
+from data.agent_runtime import AgentRunResult, CodexCliProvider, codex_environment
 from data.stock_selection_repository import get_staged_rows, stage_candidate_pool
 from data.store.sqlite_store import StockStore
 from scripts import run_stock_agent
 
 
 class AgentRuntimeTests(unittest.TestCase):
-    def test_scheduled_entrypoint_loads_private_proxy_environment(self) -> None:
+    def test_scheduled_entrypoint_clears_proxy_environment(self) -> None:
         script = (
             Path(__file__).resolve().parents[1] / "scripts" / "stock_scheduled_job.sh"
         ).read_text(encoding="utf-8")
 
-        self.assertIn('PROXY_ENV_FILE="${STOCK_PROXY_ENV_FILE:-$HOME/.proxy_env}"', script)
-        self.assertIn('source "$PROXY_ENV_FILE"', script)
-        self.assertLess(script.index('source "$PROXY_ENV_FILE"'), script.index('case "$JOB"'))
+        self.assertIn("unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY", script)
+        self.assertIn("unset http_proxy https_proxy all_proxy no_proxy", script)
+
+    def test_codex_environment_loads_only_supported_proxy_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proxy_file = Path(tmp) / "proxy.env"
+            proxy_file.write_text(
+                "export HTTPS_PROXY=http://127.0.0.1:2080\n"
+                "UNRELATED=do-not-load\n",
+                encoding="utf-8",
+            )
+            with patch.dict(
+                "os.environ",
+                {
+                    "STOCK_PROXY_ENV_FILE": str(proxy_file),
+                    "HTTP_PROXY": "http://old-proxy",
+                    "UNRELATED": "preserve-parent",
+                },
+                clear=True,
+            ):
+                env = codex_environment()
+            self.assertNotIn("HTTP_PROXY", env)
+            self.assertEqual(env["HTTPS_PROXY"], "http://127.0.0.1:2080")
+            self.assertEqual(env["UNRELATED"], "preserve-parent")
 
     @patch("data.agent_runtime.shutil.which", return_value="/opt/codex/bin/codex")
     @patch("data.agent_runtime.Path.exists", return_value=True)
@@ -55,6 +76,26 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn(
             'mcp_servers.stock_agent.env.STOCK_DB_PATH="/tmp/shadow.db"', command,
         )
+
+    @patch("data.agent_runtime.shutil.which", return_value="/opt/codex/bin/codex")
+    @patch("data.agent_runtime.Path.exists", return_value=True)
+    def test_persistent_codex_session_can_be_resumed_by_id(self, *_args) -> None:
+        provider = CodexCliProvider(model="gpt-test", sandbox="read-only", ephemeral=False)
+        initial = provider.build_command(
+            workspace=Path("/workspace"), final_message_path=Path("/tmp/initial.txt"),
+        )
+        resumed = provider.build_command(
+            workspace=Path("/workspace"), final_message_path=Path("/tmp/resumed.txt"),
+            resume_session_id="01a00000-0000-7000-8000-000000000001",
+            image_paths=[Path("/tmp/quoted.png")],
+        )
+
+        self.assertNotIn("--ephemeral", initial)
+        self.assertIn("--sandbox", initial)
+        self.assertEqual(resumed[:3], ["/opt/codex/bin/codex", "exec", "resume"])
+        self.assertNotIn("--sandbox", resumed)
+        self.assertIn("/tmp/quoted.png", resumed)
+        self.assertEqual(resumed[-2:], ["01a00000-0000-7000-8000-000000000001", "-"])
 
     def test_missing_submission_retries_without_invalidating_selection_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

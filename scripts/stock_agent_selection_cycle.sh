@@ -35,7 +35,7 @@ if ! "$PYTHON" scripts/run_stock_agent.py \
   trap 'rm -f "$alert"' EXIT
   printf '⚠️ %s Agent 最终选股失败\n\n量化候选已保留，但正式候选没有被本轮失败结果覆盖。\n' \
     "$LABEL" >"$alert"
-  "$PYTHON" scripts/send_feishu_message.py --file "$alert" --message-type text \
+  "$PYTHON" scripts/send_configured_message.py --file "$alert" --message-type text \
     --idempotency-key "agent_fail_selection_$(date '+%Y%m%d_%H%M')" || true
   exit 1
 fi

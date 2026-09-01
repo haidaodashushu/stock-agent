@@ -60,6 +60,13 @@ class StockStore:
         try:
             for stmt in get_schema_statements():
                 conn.execute(stmt)
+            # One-time, idempotent migration from the original channel-specific
+            # inbound ledger. Keep the legacy table so old snapshots remain
+            # importable while all current listeners use bot_inbound_messages.
+            conn.execute(
+                """INSERT OR IGNORE INTO bot_inbound_messages
+                   SELECT * FROM feishu_inbound_messages"""
+            )
             conn.commit()
             logger.info(f"数据库初始化完成: {self.db_path}")
         except Exception as e:

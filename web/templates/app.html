@@ -520,7 +520,7 @@ tr:hover td{background:rgba(14,165,233,.055)}
   <template v-if="tab==='live'">
     <div class="page-header">
       <h1>🧾 实盘操盘</h1>
-      <div class="subtitle">累计投入 ¥{{fmt(liveAccount.summary?.net_contributed_capital||0)}} · 持仓数量不限 · 系统负责操盘决策并生成建议单；你在广发/同花顺手动执行买卖，成交后在这里回填。</div>
+      <div class="subtitle">累计投入 ¥{{fmt(liveAccount.summary?.net_contributed_capital||0)}} · 持仓数量不限 · 系统负责操盘决策并生成建议单；Web 仅供查看，成交结果由管理员 WangZhengKui 通过企业微信应用提交。</div>
     </div>
 
     <div class="section-header" style="margin-bottom:12px">
@@ -619,7 +619,7 @@ tr:hover td{background:rgba(14,165,233,.055)}
           <button class="btn btn-sm btn-ghost" @click="loadLiveIntents">刷新</button>
         </div>
       </div>
-      <div class="form-hint" style="margin-bottom:12px">策略口径：复用模拟盘选股/盯盘信号，但实盘层按累计投入 ¥{{fmt(liveAccount.summary?.net_contributed_capital||0)}} 和当前可用现金独立风控；持仓数和单票金额均不设硬上限。安全边界：不连接真实账户、不自动下单、不保存账号密码。</div>
+      <div class="form-hint" style="margin-bottom:12px">策略口径：复用模拟盘选股/盯盘信号，但实盘层按累计投入 ¥{{fmt(liveAccount.summary?.net_contributed_capital||0)}} 和当前可用现金独立风控；持仓数和单票金额均不设硬上限。安全边界：Web 只读、不连接真实账户、不自动下单、不保存账号密码；实盘变更仅接受企业微信管理员消息。</div>
       <div class="table-wrap" v-if="liveIntents.length">
         <table>
           <thead><tr><th>时间/编号</th><th>状态</th><th>方向</th><th>股票</th><th>建议</th><th>成交</th><th>金额</th><th>有效期</th><th>AI理由 / 风控</th><th>操作</th></tr></thead>
@@ -649,14 +649,7 @@ tr:hover td{background:rgba(14,165,233,.055)}
                 <div style="color:var(--muted);font-size:11px;margin-top:4px;max-width:280px;overflow:hidden;text-overflow:ellipsis">{{it.risk_note||'-'}}</div>
               </td>
               <td>
-                <template v-if="it.status==='proposed'">
-                  <button class="btn btn-sm" @click="openLiveFill(it)">确认成交</button>
-                  <button class="btn btn-sm btn-ghost" style="margin-left:6px" @click="cancelLiveIntent(it)">取消</button>
-                </template>
-                <template v-else-if="it.status==='filled'">
-                  <button class="btn btn-sm btn-ghost" @click="openLiveFill(it)">修改成交</button>
-                </template>
-                <span v-else style="color:var(--muted);font-size:12px">{{it.user_note || '-'}}</span>
+                <span style="color:var(--muted);font-size:12px">{{it.user_note || 'Web 只读'}}</span>
               </td>
             </tr>
           </tbody>
@@ -665,24 +658,6 @@ tr:hover td{background:rgba(14,165,233,.055)}
       <div class="empty" v-else><div class="icon">🧾</div><p>暂无实盘操作记录</p></div>
     </div>
 
-    <div class="modal-mask" v-if="liveFillOpen" @click.self="closeLiveFill">
-      <div class="modal-card">
-        <div class="modal-header">
-          <h3>{{liveFillForm.mode==='edit'?'修改成交':'确认成交'}}：{{liveFillForm.intent_id}}</h3>
-          <button class="btn btn-sm btn-ghost" @click="closeLiveFill">关闭</button>
-        </div>
-        <div class="form-hint" style="margin-bottom:10px">请按你在广发/同花顺真实成交结果填写；价格和股数都可以改。这里不会自动下单，只记录结果。</div>
-        <div class="form-grid">
-          <div class="form-field"><label>成交价格</label><input type="number" step="0.01" v-model="liveFillForm.price"></div>
-          <div class="form-field"><label>成交数量</label><input type="number" step="100" v-model="liveFillForm.volume"></div>
-          <div class="form-field"><label>备注</label><input v-model="liveFillForm.note" placeholder="例如：同花顺已成交"></div>
-        </div>
-        <div class="modal-actions">
-          <button class="btn btn-ghost" @click="closeLiveFill">取消</button>
-          <button class="btn" @click="submitLiveFill">{{liveFillForm.mode==='edit'?'保存修改':'确认成交'}}</button>
-        </div>
-      </div>
-    </div>
   </template>
 
   <!-- ============= SCREENING ============= -->

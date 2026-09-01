@@ -56,7 +56,7 @@ if ! "$PYTHON" scripts/run_stock_agent.py \
   trap 'rm -f "$alert"' EXIT
   printf '⚠️ %s %s Agent 决策失败\n\n本轮没有执行成交或生成新建议，请查看 agent_scheduler.log。\n' \
     "$STAGE" "$MODE" >"$alert"
-  "$PYTHON" scripts/send_feishu_message.py --file "$alert" --message-type text \
+  "$PYTHON" scripts/send_configured_message.py --file "$alert" --message-type text \
     --idempotency-key "agent_fail_${MODE}_$(date '+%Y%m%d_%H%M')" || true
   exit 1
 fi

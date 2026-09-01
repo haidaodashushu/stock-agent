@@ -132,7 +132,7 @@ class CodexMessageAgent:
         conn = self.store._get_conn()
         try:
             rows = conn.execute(
-                """SELECT content, result FROM feishu_inbound_messages
+                """SELECT content, result FROM bot_inbound_messages
                    WHERE message_id<>? AND status='succeeded' AND handler='codex'
                    ORDER BY received_at DESC LIMIT 4""",
                 (message_id,),
@@ -189,7 +189,7 @@ def _claim_event(store: StockStore, event: dict[str, Any], message_at: datetime)
     conn = store._get_conn()
     try:
         cur = conn.execute(
-            """INSERT OR IGNORE INTO feishu_inbound_messages
+            """INSERT OR IGNORE INTO bot_inbound_messages
                (message_id,event_id,chat_id,sender_id,message_type,content,status,message_at)
                VALUES (?,?,?,?,?,?,'processing',?)""",
             (
@@ -220,7 +220,7 @@ def _update_event(store: StockStore, message_id: str, **fields: str) -> None:
     conn = store._get_conn()
     try:
         conn.execute(
-            f"UPDATE feishu_inbound_messages SET {assignments} WHERE message_id=?",
+            f"UPDATE bot_inbound_messages SET {assignments} WHERE message_id=?",
             (*fields.values(), message_id),
         )
         conn.commit()

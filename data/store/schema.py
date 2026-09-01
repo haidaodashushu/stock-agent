@@ -809,6 +809,29 @@ CREATE TABLE IF NOT EXISTS feishu_inbound_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_feishu_inbound_status_received
 ON feishu_inbound_messages(status, received_at);
+
+-- 渠道无关的入站消息账本。旧 feishu_inbound_messages 保留用于无损迁移，
+-- 新的飞书和企微监听器都只读写此表，并通过 message_id 前缀隔离渠道。
+CREATE TABLE IF NOT EXISTS bot_inbound_messages (
+    message_id    TEXT PRIMARY KEY,
+    event_id      TEXT NOT NULL DEFAULT '',
+    chat_id       TEXT NOT NULL,
+    sender_id     TEXT NOT NULL,
+    message_type  TEXT NOT NULL DEFAULT '',
+    content       TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'processing'
+                  CHECK (status IN ('processing','succeeded','failed','ignored')),
+    handler       TEXT NOT NULL DEFAULT '',
+    ack_status    TEXT NOT NULL DEFAULT '',
+    result        TEXT NOT NULL DEFAULT '',
+    error         TEXT NOT NULL DEFAULT '',
+    message_at    TEXT NOT NULL DEFAULT '',
+    received_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    processed_at  TEXT NOT NULL DEFAULT '',
+    replied_at    TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_bot_inbound_status_received
+ON bot_inbound_messages(status, received_at);
 """;
 
 

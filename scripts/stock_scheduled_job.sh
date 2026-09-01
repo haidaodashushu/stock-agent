@@ -5,15 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="$ROOT/.venv/bin/python"
 JOB="${1:-}"
 
-# Cron starts with a minimal environment and does not read the interactive
-# shell configuration that loads the workstation proxy.  All scheduled Codex
-# jobs enter through this wrapper, so establish the same network environment
-# here without storing credentials in the repository or crontab.
-PROXY_ENV_FILE="${STOCK_PROXY_ENV_FILE:-$HOME/.proxy_env}"
-if [[ -r "$PROXY_ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$PROXY_ENV_FILE"
-fi
+# Market data and messaging must go direct to avoid consuming limited proxy
+# traffic. CodexCliProvider loads the private proxy file only for Codex itself.
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY
+unset http_proxy https_proxy all_proxy no_proxy
 
 cd "$ROOT"
 
@@ -68,7 +63,7 @@ case "$JOB" in
     scripts/hermes_nightly_update.sh | tee "$message"
     rc=${PIPESTATUS[0]}
     set -e
-    "$PYTHON" scripts/send_feishu_message.py \
+    "$PYTHON" scripts/send_configured_message.py \
       --file "$message" --message-type text \
       --idempotency-key "nightly_$(date '+%Y%m%d')" || true
     exit "$rc"

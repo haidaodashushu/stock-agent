@@ -1,0 +1,24 @@
+[Unit]
+Description=Stock Agent WeCom intelligent robot long connection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{STOCK_ROOT}}
+Environment=PATH={{USER_HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=STOCK_PROXY_ENV_FILE={{USER_HOME}}/.proxy_env
+Environment=HTTP_PROXY=
+Environment=HTTPS_PROXY=
+Environment=ALL_PROXY=
+Environment=http_proxy=
+Environment=https_proxy=
+Environment=all_proxy=
+ExecStart=/usr/bin/env node {{STOCK_ROOT}}/scripts/wecom_aibot_listener.mjs
+Restart=always
+RestartSec=3
+TimeoutStopSec=90
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

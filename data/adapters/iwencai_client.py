@@ -128,4 +128,5 @@ class IwenCaiClient:
 
     @staticmethod
     def load_api_key() -> str:
-        return IwenCaiKeyring.load_profile_key()
+        candidates = IwenCaiKeyring.candidates()
+        return candidates[0][1] if candidates else ""

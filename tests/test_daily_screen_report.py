@@ -5,7 +5,7 @@ import pandas as pd
 
 from data.store.sqlite_store import StockStore
 from scripts.daily_screen import _build_screening_report, _save_screen_results
-from scripts.render_cron_report import build_screening_report_blocks, render_presentation
+from scripts.render_cron_report import build_screening_report_blocks, render_markdown, render_presentation
 
 
 class DailyScreenReportTests(unittest.TestCase):
@@ -168,6 +168,12 @@ class DailyScreenReportTests(unittest.TestCase):
         self.assertIn("趋势、板块和增量逻辑同向", ai_block)
         self.assertIn("放量持续性待确认", ai_block)
         self.assertEqual(report["run"]["selection_method"], "ai")
+
+        markdown = render_markdown(report)
+        self.assertIn("**1. 000001 测试股票**｜评分 8.0｜strong", markdown)
+        self.assertIn("> 入选：趋势、板块和增量逻辑同向", markdown)
+        self.assertIn("> 风险：放量持续性待确认", markdown)
+        self.assertNotIn("| 代码 | 名称 |", markdown)
 
     def test_screening_presentation_uses_card_markdown(self):
         report = _build_screening_report(

@@ -1,6 +1,9 @@
 import unittest
 
+from fastapi.testclient import TestClient
+
 from data.live_manual_account import blocked_prefixes, is_live_buy_allowed
+from web.app import app
 
 
 class LiveBoardPermissionTests(unittest.TestCase):
@@ -19,6 +22,23 @@ class LiveBoardPermissionTests(unittest.TestCase):
 
         self.assertEqual(blocked_prefixes(config), ())
         self.assertTrue(is_live_buy_allowed("688001", config))
+
+    def test_public_web_cannot_write_live_fills_or_statuses(self):
+        client = TestClient(app)
+
+        fill = client.post(
+            "/api/live-intents/not-real/fill",
+            json={"price": 10.0, "volume": 100},
+        )
+        status = client.post(
+            "/api/live-intents/not-real/status",
+            json={"status": "cancelled"},
+        )
+
+        self.assertEqual(fill.status_code, 403)
+        self.assertEqual(status.status_code, 403)
+        self.assertIn("企业微信", fill.json()["detail"])
+        self.assertIn("企业微信", status.json()["detail"])
 
 
 if __name__ == "__main__":

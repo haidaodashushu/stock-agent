@@ -1,0 +1,18 @@
+[Unit]
+Description=Stock Agent Web and WeCom callback
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={{STOCK_ROOT}}
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH={{USER_HOME}}/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=STOCK_PROXY_ENV_FILE={{USER_HOME}}/.proxy_env
+ExecStart={{STOCK_ROOT}}/.venv/bin/python -m uvicorn web.app:app --host 0.0.0.0 --port 8899 --log-level info
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

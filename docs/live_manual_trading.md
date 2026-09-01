@@ -98,7 +98,7 @@ im.message.receive_v1` 常驻接收消息。监听器只接受 `runtime.local.js
 
 处理顺序固定为：
 
-1. 以飞书 `message_id` 写入 `feishu_inbound_messages` 幂等账本；
+1. 以渠道前缀加 `message_id` 写入 `bot_inbound_messages` 幂等账本；
 2. 先给原消息添加 `OnIt` 表情；
 3. 成交回报走本地确定性解析，一条消息中的多笔成交在同一 SQLite 事务内回填；
 4. 其他消息交给独立、有限历史上下文的 Codex 任务；
