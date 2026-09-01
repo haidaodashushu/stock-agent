@@ -120,6 +120,34 @@ The supplied crontab is a template containing `{{STOCK_ROOT}}`; do not install
 it verbatim. Existing scheduler migration and rollback instructions are in
 [`docs/codex-agent-runtime.md`](docs/codex-agent-runtime.md).
 
+### 7. Migrate runtime data to another server
+
+Do not copy the complete SQLite database unless you need decades of market
+history. The compact exporter keeps every account, order, live-fill, candidate,
+observation and runtime-state table, but trims daily bars to:
+
+- the latest 120 trading sessions for the whole market, so the next full-market
+  screen still has enough history for the current technical indicators;
+- the latest 500 sessions available for current holdings, candidates,
+  strategic observations, watchlist stocks and active trading state.
+
+Create a private migration package:
+
+```bash
+.venv/bin/python scripts/export_migration_snapshot.py \
+  --market-sessions 120 \
+  --scope-sessions 500 \
+  --include-runtime-config
+```
+
+The archive and SHA-256 checksum are written under `dist/`, which is ignored by
+Git. The archive contains `data/stock_data.db`, applicable `config/*.local.json`
+files, `scope.json`, `manifest.json` and restore instructions. It does not
+contain Git history, Codex/lark-cli login state, API tokens or user keyrings.
+Treat the archive as private because account data and Feishu identifiers may be
+included. Verify the checksum and follow the packaged `MIGRATION_README.md` on
+the destination host before enabling scheduled jobs.
+
 Tracked content:
 
 - `account/`, `data/`, `engine/`, `strategy/`, `scripts/`, `web/`: platform source code.
