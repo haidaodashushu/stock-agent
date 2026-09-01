@@ -4,6 +4,122 @@ This repository contains an A-share analysis, screening and paper/live-shadow
 trading workspace. Scheduled AI decisions use the Codex CLI; deterministic data
 refresh, validation and execution remain local Python or shell processes.
 
+## Quick Start
+
+### 1. Prerequisites
+
+- Linux or macOS with Git and Python 3.11+
+- Network access to the configured public market-data providers
+- Optional: Codex CLI for AI decisions and `lark-cli` for Feishu delivery
+
+Clone the repository and create an isolated Python environment:
+
+```bash
+git clone https://github.com/haidaodashushu/stock-agent.git
+cd stock-agent
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+### 2. Create local configuration
+
+The committed examples contain no account data or credentials. Copy the local
+files you want to customize; all `*.local.json` files are ignored by Git.
+
+```bash
+cp config/live_manual_account.example.json config/live_manual_account.local.json
+cp config/watchlist.example.json config/watchlist.local.json
+cp config/strategic_theme_pool.example.json config/strategic_theme_pool.local.json
+cp config/reconcile_resolved_issues.example.json config/reconcile_resolved_issues.local.json
+```
+
+The application can start without these copies by using built-in defaults and
+the small example strategic pool. Run the test suite before loading real data:
+
+```bash
+python -m unittest discover -s tests -p 'test_*.py'
+```
+
+### 3. Start the Web dashboard
+
+```bash
+scripts/start_web.sh
+```
+
+Open <http://127.0.0.1:8899>. The first start creates an empty local SQLite
+database under `data/`; database files and logs are ignored by Git. Override
+the bind address, port or database path when needed:
+
+```bash
+HOST=0.0.0.0 PORT=8899 STOCK_DB_PATH=/path/to/stock.db scripts/start_web.sh
+```
+
+Do not expose the dashboard to an untrusted network without adding an
+authentication and TLS layer.
+
+### 4. Populate market data (optional)
+
+The dashboard works with an empty database, but screening requires stock
+metadata and daily bars. These commands access external data providers and may
+take several minutes on the first run:
+
+```bash
+python scripts/sync_baostock_basic.py
+python scripts/nightly_update.py --days 500
+```
+
+Verify the resulting metadata coverage:
+
+```bash
+python scripts/sync_baostock_basic.py --verify-only
+```
+
+### 5. Enable AI and Feishu integrations (optional)
+
+AI decisions require an authenticated `codex` CLI. Feishu delivery and inbound
+messages additionally require an authenticated `lark-cli` profile named
+`stock` (or `STOCK_LARK_PROFILE`), plus a private runtime config:
+
+```bash
+cp config/runtime.example.json config/runtime.local.json
+# Edit target_id, allowed_sender_ids and receive.enabled before continuing.
+
+codex login status
+lark-cli --profile stock auth status
+.venv/bin/python scripts/switch_agent_runtime.py preflight
+```
+
+Install the per-user Feishu listener only after the preflight succeeds:
+
+```bash
+.venv/bin/python scripts/install_feishu_listener_service.py
+systemctl --user status stock-feishu-listener.service
+```
+
+The live-shadow path never connects to a broker or submits a real order. It
+only creates advice records and accepts explicit manual-fill reports.
+
+### 6. Run individual jobs
+
+```bash
+# Quantitative staging plus AI final selection
+scripts/stock_agent_selection_cycle.sh
+
+# Account-isolated intraday decisions
+scripts/stock_agent_trading_cycle.sh simulated
+scripts/stock_agent_trading_cycle.sh live
+
+# Deterministic nightly refresh
+scripts/stock_scheduled_job.sh nightly-update
+```
+
+The supplied crontab is a template containing `{{STOCK_ROOT}}`; do not install
+it verbatim. Existing scheduler migration and rollback instructions are in
+[`docs/codex-agent-runtime.md`](docs/codex-agent-runtime.md).
+
 Tracked content:
 
 - `account/`, `data/`, `engine/`, `strategy/`, `scripts/`, `web/`: platform source code.
