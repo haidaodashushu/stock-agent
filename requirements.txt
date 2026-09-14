@@ -6,3 +6,4 @@ numpy==2.4.6
 akshare==1.18.64
 baostock
 mcp==1.26.0
+jsonschema>=4,<5

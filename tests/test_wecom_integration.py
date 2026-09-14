@@ -3,6 +3,7 @@ import os
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -107,6 +108,15 @@ class WeComCryptoTests(unittest.TestCase):
 
 
 class WeComInboundTests(unittest.TestCase):
+    def setUp(self):
+        route_patch = patch("data.wecom_inbound.route_message")
+        self.router = route_patch.start()
+        self.addCleanup(route_patch.stop)
+        self.router.return_value = {
+            "action": "answer", "reason": "普通问答", "clarification": "",
+            "fills": [], "cancel_ids": [],
+        }
+
     def test_trusted_message_is_processed_replied_and_deduplicated(self):
         with tempfile.TemporaryDirectory() as directory:
             store = StockStore(str(Path(directory) / "stock.db"))
@@ -169,6 +179,11 @@ class WeComInboundTests(unittest.TestCase):
             self.assertEqual(client.sent, [("HongBo", "处理完成")])
 
     def test_allowed_non_admin_cannot_submit_live_fill(self):
+        self.router.return_value = {
+            "action": "fill", "reason": "用户报告成交", "clarification": "",
+            "fills": [{"action": "buy", "code": "600519", "intent_id": "", "price": 1500, "volume": 100}],
+            "cancel_ids": [],
+        }
         with tempfile.TemporaryDirectory() as directory:
             store = StockStore(str(Path(directory) / "stock.db"))
             client = _FakeClient()
@@ -224,6 +239,7 @@ class WeComInboundTests(unittest.TestCase):
             reset = _event("HongBo")
             reset["MsgId"] = "session-reset"
             reset["Content"] = "/new"
+            self.router.return_value["action"] = "reset"
             handle_wecom_message(
                 reset, settings=_settings(), store=store, client=client, agent=second_agent,
             )
@@ -295,6 +311,7 @@ class WeComInboundTests(unittest.TestCase):
             self.assertEqual(agent.calls[0][1], "请介绍一下自己")
 
     def test_latest_night_selection_request_uses_durable_report(self):
+        self.router.return_value["action"] = "selection"
         with tempfile.TemporaryDirectory() as directory:
             store = StockStore(str(Path(directory) / "stock.db"))
             conn = store._get_conn()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -38,6 +39,7 @@ INTENT_RE = re.compile(
     r"(?P<price>\d+(?:\.\d+)?)\s+(?P<volume>\d+)",
     re.IGNORECASE,
 )
+INTENT_ID_RE = re.compile(r"\bL\d{14}-[A-Z0-9]{6}\b", re.IGNORECASE)
 NATURAL_RE = re.compile(
     rf"(?P<verb>{VERBS})\s+(?P<code>[036]\d{{5}})"
     r"(?:\s+[\u4e00-\u9fffA-Za-z*]+)?\s*[：:]?\s*"
@@ -54,7 +56,7 @@ COMPACT_RE = re.compile(
 def parse_fill_commands(text: str) -> list[FillCommand]:
     """Parse one or more fill lines, including the natural Feishu report form."""
     commands: list[FillCommand] = []
-    for raw_line in re.split(r"[\n;；]+", str(text or "")):
+    for raw_line in re.split(r"[\n;；]+", str(text or "").split("[企业微信引用消息]", 1)[0]):
         line = raw_line.strip().lstrip("-*• ").strip()
         if not line:
             continue
@@ -71,10 +73,11 @@ def parse_fill_commands(text: str) -> list[FillCommand]:
             continue
         match = NATURAL_RE.search(line) or COMPACT_RE.search(line)
         if match:
+            intent_match = INTENT_ID_RE.search(line)
             commands.append(FillCommand(
                 action=VERB_ACTION[match.group("verb")],
                 code=match.group("code").zfill(6),
-                intent_id="",
+                intent_id=intent_match.group(0).upper() if intent_match else "",
                 price=round(float(match.group("price")), 2),
                 volume=int(match.group("volume")),
                 raw=line,
@@ -83,7 +86,7 @@ def parse_fill_commands(text: str) -> list[FillCommand]:
 
 
 def looks_like_fill_report(text: str) -> bool:
-    return bool(re.search(rf"(?:{VERBS}).*(?:[036]\d{{5}}|L\d{{14}}-)", str(text or ""), re.S))
+    return bool(re.search(rf"(?:{VERBS}).*(?:[036]\d{{5}}|L\d{{14}}-)", str(text or "").split("[企业微信引用消息]", 1)[0], re.S))
 
 
 def _parse_local(value: str) -> datetime | None:
@@ -99,10 +102,6 @@ def _matching_intent(conn, command: FillCommand, message_at: datetime):
             "SELECT * FROM live_trade_intents WHERE intent_id=?",
             (command.intent_id,),
         ).fetchone()
-        if not row:
-            raise LiveFillError(f"未找到建议单 {command.intent_id}")
-        if command.action and row["action"] != command.action:
-            raise LiveFillError(f"建议单 {command.intent_id} 的买卖方向与成交回报不一致")
         return row
 
     params: list[Any] = [command.code]
@@ -114,7 +113,7 @@ def _matching_intent(conn, command: FillCommand, message_at: datetime):
         f"SELECT * FROM live_trade_intents WHERE {where} ORDER BY id DESC LIMIT 20",
         params,
     ).fetchall()
-    eligible = []
+    same_day_unfilled = []
     for row in rows:
         if row["status"] == "filled":
             filled_at = _parse_local(row["filled_at"])
@@ -124,23 +123,72 @@ def _matching_intent(conn, command: FillCommand, message_at: datetime):
                 and round(float(row["filled_price"] or 0), 2) == command.price
                 and int(row["filled_volume"] or 0) == command.volume
             ):
-                eligible.append(row)
+                return row
             continue
         created_at = _parse_local(row["created_at"])
-        expires_at = _parse_local(row["expires_at"])
-        if created_at and created_at <= message_at and (not expires_at or message_at <= expires_at):
-            eligible.append(row)
-    if not eligible:
-        direction = {"buy": "买入", "sell": "卖出", "": "成交"}[command.action]
-        raise LiveFillError(
-            f"未找到 {command.code} 在消息时间有效的{direction}建议单，请带建议单编号"
-        )
-    active = [row for row in eligible if row["status"] != "filled"]
-    candidates = active or eligible
-    if len(candidates) > 1:
-        ids = "、".join(str(row["intent_id"]) for row in candidates[:5])
-        raise LiveFillError(f"{command.code} 匹配到多张建议单，请明确编号：{ids}")
-    return candidates[0]
+        if (
+            created_at
+            and created_at <= message_at
+            and created_at.date() == message_at.date()
+        ):
+            same_day_unfilled.append(row)
+    if not same_day_unfilled:
+        return None
+    # Rows are newest first. A report without an explicit ID belongs to the
+    # latest preceding unfilled decision for the same code and direction.
+    # Expiry controls whether a suggestion is actionable, not whether a real
+    # execution can be recorded after the fact.
+    return same_day_unfilled[0]
+
+
+def _manual_intent(
+    conn,
+    command: FillCommand,
+    *,
+    source_row,
+    message_id: str,
+    message_at: datetime,
+    command_index: int,
+):
+    """Create a fillable manual record when a suggestion is only a reference."""
+    source_action = str(source_row["action"]) if source_row is not None else ""
+    source_code = str(source_row["code"]).zfill(6) if source_row is not None else ""
+    action = command.action or source_action
+    code = command.code or source_code
+    if action not in {"buy", "sell"}:
+        raise LiveFillError("手工成交回报必须明确写买入或卖出")
+    if not re.fullmatch(r"[036]\d{5}", code):
+        raise LiveFillError("手工成交回报必须包含有效的六位股票代码")
+
+    digest = sha256(
+        f"{message_id}|{command_index}|{command.raw}".encode("utf-8")
+    ).hexdigest()[:6].upper()
+    intent_id = f"L{message_at.strftime('%Y%m%d%H%M%S')}-{digest}"
+    source_id = command.intent_id or (
+        str(source_row["intent_id"]) if source_row is not None else ""
+    )
+    source_matches_code = source_row is not None and source_code == code
+    name = str(source_row["name"] or code) if source_matches_code else code
+    reason = "管理员手工成交回报"
+    if source_id:
+        reason += f"；参考建议单 {source_id}，实际成交信息以回报为准"
+    conn.execute(
+        """INSERT OR IGNORE INTO live_trade_intents
+           (intent_id,code,name,action,suggested_price,suggested_volume,
+            suggested_amount,limit_price,reason,strategy,risk_note,status,
+            created_at,expires_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (
+            intent_id, code, name, action, command.price, command.volume,
+            round(command.price * command.volume, 2), 0.0, reason,
+            "manual_execution", "", "proposed",
+            message_at.strftime("%Y-%m-%d %H:%M:%S"), "",
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM live_trade_intents WHERE intent_id=?",
+        (intent_id,),
+    ).fetchone()
 
 
 def process_fill_report(
@@ -152,6 +200,19 @@ def process_fill_report(
 ) -> dict[str, Any]:
     """Atomically fill every command contained in one Feishu message."""
     commands = parse_fill_commands(text)
+    return process_fill_commands(
+        commands, message_id=message_id, message_at=message_at, store=store,
+    )
+
+
+def process_fill_commands(
+    commands: list[FillCommand],
+    *,
+    message_id: str,
+    message_at: datetime,
+    store: StockStore | None = None,
+) -> dict[str, Any]:
+    """Execute validated structured fills without classifying message text."""
     if not commands:
         raise LiveFillError(
             "未识别成交回报。示例：买入 600460 士兰微：300 股，成交价 41.20"
@@ -163,13 +224,37 @@ def process_fill_report(
     filled_at = message_at.strftime("%Y-%m-%d %H:%M:%S")
     try:
         conn.execute("BEGIN IMMEDIATE")
-        for command in commands:
+        for command_index, command in enumerate(commands):
             if command.price <= 0 or command.volume <= 0:
                 raise LiveFillError("成交价格和数量必须大于0")
-            row = _matching_intent(conn, command, message_at)
+            source_row = _matching_intent(conn, command, message_at)
+            row = source_row
+            if row is not None:
+                source_action = str(row["action"])
+                source_code = str(row["code"]).zfill(6)
+                actual_action = command.action or source_action
+                actual_code = command.code or source_code
+                filled_differs = row["status"] == "filled" and (
+                    round(float(row["filled_price"] or 0), 2) != command.price
+                    or int(row["filled_volume"] or 0) != command.volume
+                )
+                if (
+                    actual_action != source_action
+                    or actual_code != source_code
+                    or row["status"] in {"cancelled", "rejected"}
+                    or filled_differs
+                ):
+                    row = None
+            if row is None:
+                row = _manual_intent(
+                    conn,
+                    command,
+                    source_row=source_row,
+                    message_id=message_id,
+                    message_at=message_at,
+                    command_index=command_index,
+                )
             action = str(row["action"])
-            if row["status"] in {"cancelled", "rejected"}:
-                raise LiveFillError(f"建议单 {row['intent_id']} 已{row['status']}，不能自动回填")
             if row["status"] == "filled":
                 if (
                     round(float(row["filled_price"] or 0), 2) != command.price
@@ -180,7 +265,7 @@ def process_fill_report(
                 already_filled = True
             else:
                 warnings = execution_deviation_warnings(row, command.price, command.volume, cfg)
-                note = f"飞书消息 {message_id}：{command.raw}"
+                note = f"机器人消息 {message_id}：{command.raw}"
                 if warnings:
                     note += "；执行偏离警告：" + "；".join(warnings)
                 conn.execute(

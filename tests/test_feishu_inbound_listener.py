@@ -92,6 +92,136 @@ class LiveFillServiceTests(unittest.TestCase):
             ],
         )
 
+    def test_parse_natural_fill_with_trailing_intent_id(self):
+        commands = parse_fill_commands(
+            "实盘建议 卖出 002541 鸿路钢构：300股，参考价 20.80，"
+            "编号 L20260902133521-1A3014"
+        )
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0].action, "sell")
+        self.assertEqual(commands[0].code, "002541")
+        self.assertEqual(commands[0].price, 20.80)
+        self.assertEqual(commands[0].volume, 300)
+        self.assertEqual(commands[0].intent_id, "L20260902133521-1A3014")
+
+    def test_expired_intent_can_be_filled_when_natural_report_has_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = _store(directory)
+            intent_id = "L20260901140001-AAAAAA"
+            _insert_intent(store, intent_id, "002541", "sell", "鸿路钢构")
+            conn = store._get_conn()
+            try:
+                conn.execute(
+                    "UPDATE live_trade_intents SET status='expired' WHERE intent_id=?",
+                    (intent_id,),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            result = process_fill_report(
+                f"卖出 002541 鸿路钢构：300股，成交价 20.80，编号 {intent_id}",
+                message_id="om_expired_with_id",
+                message_at=datetime(2026, 9, 1, 14, 30),
+                store=store,
+            )
+            self.assertEqual(result["fills"][0]["intent_id"], intent_id)
+            conn = store._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT status,filled_price,filled_volume FROM live_trade_intents "
+                    "WHERE intent_id=?",
+                    (intent_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(tuple(row), ("filled", 20.80, 300))
+
+    def test_late_report_without_id_uses_latest_same_day_expired_intent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = _store(directory)
+            older_id = "L20260901140001-AAAAAA"
+            latest_id = "L20260901140002-BBBBBB"
+            _insert_intent(store, older_id, "002541", "sell", "鸿路钢构")
+            _insert_intent(store, latest_id, "002541", "sell", "鸿路钢构")
+            conn = store._get_conn()
+            try:
+                conn.execute(
+                    "UPDATE live_trade_intents SET status='expired',created_at=?,expires_at=? "
+                    "WHERE intent_id=?",
+                    ("2026-09-01 13:30:00", "2026-09-01 13:45:00", older_id),
+                )
+                conn.execute(
+                    "UPDATE live_trade_intents SET status='expired',created_at=?,expires_at=? "
+                    "WHERE intent_id=?",
+                    ("2026-09-01 14:00:00", "2026-09-01 14:15:00", latest_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+            result = process_fill_report(
+                "卖出 002541 鸿路钢构：200股，成交价 21.50",
+                message_id="om_late_without_id",
+                message_at=datetime(2026, 9, 1, 14, 30),
+                store=store,
+            )
+            fill = result["fills"][0]
+            self.assertEqual(fill["intent_id"], latest_id)
+            self.assertEqual((fill["price"], fill["volume"]), (21.50, 200))
+
+    def test_mismatched_reference_becomes_manual_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = _store(directory)
+            source_id = "L20260901140001-AAAAAA"
+            _insert_intent(store, source_id, "000768", "buy", "中航西飞")
+            result = process_fill_report(
+                f"卖出 002541 鸿路钢构：200股，成交价 20.80，编号 {source_id}",
+                message_id="om_mismatched_reference",
+                message_at=datetime(2026, 9, 1, 14, 4, 30),
+                store=store,
+            )
+            fill = result["fills"][0]
+            self.assertNotEqual(fill["intent_id"], source_id)
+            self.assertEqual((fill["action"], fill["code"]), ("sell", "002541"))
+            conn = store._get_conn()
+            try:
+                source = conn.execute(
+                    "SELECT status FROM live_trade_intents WHERE intent_id=?",
+                    (source_id,),
+                ).fetchone()
+                manual = conn.execute(
+                    "SELECT status,strategy,reason FROM live_trade_intents WHERE intent_id=?",
+                    (fill["intent_id"],),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(source["status"], "proposed")
+            self.assertEqual((manual["status"], manual["strategy"]), ("filled", "manual_execution"))
+            self.assertIn(source_id, manual["reason"])
+
+    def test_report_without_any_suggestion_becomes_manual_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = _store(directory)
+            result = process_fill_report(
+                "买入 300750 宁德时代：100股，成交价 188.50",
+                message_id="om_manual_without_suggestion",
+                message_at=datetime(2026, 9, 1, 14, 4, 30),
+                store=store,
+            )
+            fill = result["fills"][0]
+            self.assertEqual((fill["action"], fill["code"]), ("buy", "300750"))
+            conn = store._get_conn()
+            try:
+                row = conn.execute(
+                    "SELECT status,strategy,filled_price,filled_volume "
+                    "FROM live_trade_intents WHERE intent_id=?",
+                    (fill["intent_id"],),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(tuple(row), ("filled", "manual_execution", 188.50, 100))
+
     def test_process_multiple_fills_atomically(self):
         with tempfile.TemporaryDirectory() as directory:
             store = _store(directory)
@@ -121,14 +251,14 @@ class LiveFillServiceTests(unittest.TestCase):
                 ],
             )
 
-    def test_fill_batch_rolls_back_when_any_line_cannot_match(self):
+    def test_fill_batch_rolls_back_when_manual_line_has_no_actual_direction(self):
         with tempfile.TemporaryDirectory() as directory:
             store = _store(directory)
             _insert_intent(store, "L20260901140001-AAAAAA", "000768", "buy", "中航西飞")
-            with self.assertRaisesRegex(LiveFillError, "未找到 002541"):
+            with self.assertRaisesRegex(LiveFillError, "必须明确写买入或卖出"):
                 process_fill_report(
                     "买入 000768 中航西飞：300 股，成交价 22.73\n"
-                    "买入 002541 鸿路钢构：300 股，成交价 21.28",
+                    "成交 002541 鸿路钢构：300 股，成交价 21.28",
                     message_id="om_test",
                     message_at=datetime(2026, 9, 1, 14, 4, 30),
                     store=store,
