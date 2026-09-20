@@ -127,7 +127,7 @@ def trading_decision_contract(
     action_requirements: dict[str, Any]
     if mode == "simulated":
         action_requirements = {
-            "buy": "target_amount > 0; code must be an eligible active candidate",
+            "buy": "target_amount > 0; code must satisfy hard_constraints.new_entry_gate",
             "add": "target_amount > 0; code must be an existing position",
             "reduce": "sell_pct or volume; default sell_pct is 0.5",
             "sell": "sell_pct or volume; default sell_pct is 1.0",
@@ -136,7 +136,7 @@ def trading_decision_contract(
     else:
         action_requirements = {
             "buy": (
-                "target_amount > 0 or volume > 0; opens an eligible candidate or adds "
+                "target_amount > 0 or volume > 0; new positions satisfy hard_constraints.new_entry_gate; adds "
                 "to an existing position"
             ),
             "sell": (
@@ -224,7 +224,13 @@ def trading_decision_contract(
         "action_requirements": action_requirements,
         "hard_constraints": {
             "market_regime": "copy overview.market.regime.regime",
-            "new_entry_gate": "selection.buy_eligible=true and setup_stage=actionable",
+            "new_entry_gate": (
+                "enabled entry_route AND either (selection.buy_eligible=true and setup_stage=actionable) "
+                "or (selection.opportunity.requires_requalification=true, watch_plan.requalified=true "
+                "and a nonempty requalification_reason based on current evidence). "
+                "Historical observation alone never grants buy permission. "
+                "Current data-quality and account constraints still apply."
+            ),
             "sellable_volume": "never exceed position.available_to_sell",
             "blocked_prefixes": list(account_policy.get("blocked_prefixes") or []),
             "max_decision_price_drift_pct": account_policy.get(
