@@ -178,6 +178,32 @@ def trading_decision_contract(
         "risks":"1..300 characters; falsifiable risks, separate facts from inference",
         "refresh_condition":"1..300 characters; what would require revising this research",
     }
+    from data.trading_assessment import GRADES, FAMILY_PATHS
+    row_shape["assessment"] = {
+        "required_when":"overview.refresh.decision_assessment_required=true",
+        **{key:{"grade":"|".join(values),"reason":"1..240 characters; evidence and missing facts"} for key,values in GRADES.items()},
+        "route_reason":"1..240 characters; use this entry route's confirmation and invalidation logic",
+        "confidence_reason":"1..240 characters; certainty of this action, not probability of profit",
+        "confirmations":[{
+            "family":"|".join(FAMILY_PATHS),"direction":"support|oppose|mixed",
+            "source_path":"existing nonempty path within this stock's evidence, e.g. technical.ma5 or sector.rotation_score",
+            "basis":"1..240 characters; what this evidence actually supports or contradicts",
+        }],
+    }
+    row_shape["position_plan"] = {
+        "required_when":"assessment enabled and action is buy/add",
+        "amount_reason":"1..240 characters; why this incremental amount fits the account",
+        "invalidation_price":"finite positive structural reference below current price, or null if not defensible",
+        "invalidation_basis":"1..240 characters; source basis or why no reliable level exists",
+        "risk_budget_reason":"1..240 characters; affordability of loss and uncertainty, including inability to immediately exit",
+        "concentration_reason":"1..240 characters; effect on stock/industry exposure and any planned replacement",
+    }
+    row_shape["exit_plan"] = {
+        "required_when":"assessment enabled and action is sell/reduce/clear",
+        "trigger":"thesis_invalid|structure_failure|portfolio_rebalance|risk_reduction",
+        "reason":"1..240 characters; actual exit evidence, not profit or residual size alone",
+        "why_now":"1..240 characters; new change, urgency and sellability constraints",
+    }
     decision_shape: dict[str, Any] = {
         "reviewed_codes": ["all required_evidence_codes"],
         "market_view": {"regime": "overview regime", "summary": "text"},
@@ -222,6 +248,15 @@ def trading_decision_contract(
             "confidence": _values(CONFIDENCES),
         },
         "action_requirements": action_requirements,
+        "assessment_policy": {
+            "grades_are_probabilities": False,
+            "weighted_total_score": None,
+            "research_grade":"reuse research.profile.quality; changing it requires research_update; new updates inherit assessment.research",
+            "entry_requirements":"research strong/moderate, timing ready, evidence reliable/partial, portfolio fit/conditional; grades never offset hard constraints",
+            "strong_entry_confidence":"reliable evidence, price_structure support plus another independent supported family; repeat family/path forbidden",
+            "confirmation_source_prefixes": FAMILY_PATHS,
+            "market_label":"only index snapshot background; classification_usable=false means unknown, not neutral evidence",
+        },
         "hard_constraints": {
             "market_regime": "copy overview.market.regime.regime",
             "new_entry_gate": (

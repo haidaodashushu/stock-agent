@@ -15,6 +15,7 @@ from tests.test_opportunity_trial import NOW,candidate,plan,quote
 
 def update(context,**changes):
     return {"facts_version":context["facts_version"],"status":"ready",
+            "quality":{"grade":"moderate","reason":"结构改善，公司证据仍有缺口"},
             "thesis":"研究原始平台逻辑","company_view":"报告期20260630，盈利证据待核对",
             "trend_view":"日线平台结构","risks":"结构破坏风险",
             "refresh_condition":"新财报或趋势结构变化时重做研究",**changes}
@@ -115,6 +116,19 @@ class StockResearchTests(unittest.TestCase):
         self.assertNotIn("revenue_yoy",compact["selection"]["fundamental"])
         self.assertEqual(detailed["selection"]["fundamental"]["revenue_yoy"],10)
         self.assertEqual(compact["research"],detailed["research"])
+
+    def test_execution_context_can_validate_financial_paths_from_expanded_evidence(self):
+        from data import trading_decision_repository as repository
+        self.record()
+        item={"code":"002185","is_candidate":True,"research":self.context(),
+              "fundamental":{"period":"20260630","revenue_yoy":10}}
+        as_of=trial.stamp(NOW)
+        snapshot=({"stage":"1012","refresh":{"opportunity_trial":True,"decision_assessment_required":True}},
+                  [{"payload":json.dumps(item),"updated_at":as_of}],as_of)
+        with patch.object(repository,"_connect"),patch.object(repository,"_snapshot",return_value=snapshot):
+            context=repository.build_execution_context(as_of,"simulated")
+        self.assertTrue(context["decision_assessment_required"])
+        self.assertEqual(context["candidates"][0]["selection"]["fundamental"]["revenue_yoy"],10)
 
     def test_daily_computation_is_cached_until_verified_window_changes(self):
         from data.adjusted_daily import ensure_table

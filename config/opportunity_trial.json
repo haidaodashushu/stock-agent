@@ -1,6 +1,7 @@
 {
   "enabled": false,
   "event_decisions": true,
+  "decision_assessment": true,
   "candidate_batch_size": 8,
   "deep_research_candidate_batch_size": 3,
   "research_valid_sessions": 5,

@@ -5,7 +5,7 @@ import math
 from typing import Any
 
 
-MARKET_REGIME_RULE_VERSION = 1
+MARKET_REGIME_RULE_VERSION = 2
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -18,13 +18,17 @@ def _float(value: Any, default: float = 0.0) -> float:
 
 def classify_market_regime(indices: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Classify one deterministic market regime from an index snapshot."""
-    valid = {
-        symbol: _float(row.get("change_pct"))
-        for symbol, row in indices.items()
-        if isinstance(row, dict)
-        and row.get("name")
-        and row.get("change_pct") is not None
-    }
+    valid = {}
+    for symbol, row in indices.items():
+        if not isinstance(row,dict) or not row.get("name") or row.get("error"):
+            continue
+        raw = row.get("change_pct")
+        try:
+            number = float(raw)
+        except (TypeError,ValueError):
+            continue
+        if not isinstance(raw,bool) and math.isfinite(number):
+            valid[symbol] = number
     broad_symbols = ("sh000001", "sz399001", "sh000300")
     broad = [valid[symbol] for symbol in broad_symbols if symbol in valid]
     changes = list(valid.values())
@@ -35,7 +39,8 @@ def classify_market_regime(indices: dict[str, dict[str, Any]]) -> dict[str, Any]
     broad_average = round(sum(broad) / len(broad), 2) if broad else average
 
     regime = "neutral"
-    if total >= 3:
+    usable = total >= 3 and len(broad) >= 2
+    if usable:
         breadth_threshold = math.ceil(total * 0.6)
         if broad_average >= 0.6 and advancing >= breadth_threshold:
             regime = "strong"
@@ -48,7 +53,12 @@ def classify_market_regime(indices: dict[str, dict[str, Any]]) -> dict[str, Any]
         "summary": (
             f"市场{label}：宽基均值{broad_average:+.2f}%，"
             f"{advancing}涨/{declining}跌（有效指数{total}个）"
-        ),
+        ) if usable else "指数数据不足；neutral仅为兼容占位，不代表已判断市场中性",
+        "data_status": "available" if usable else "partial" if total else "unavailable",
+        "classification_usable": usable,
+        "interpretation_scope": "index_snapshot_only; not bull/bear cycle, stock breadth or persistent mainline",
+        "source_time_status": "provided" if valid and all(indices[s].get("source_time") for s in valid) else "missing_or_partial",
+        "stock_breadth_available": False,
         "broad_average_pct": broad_average,
         "index_average_pct": average,
         "advancing_count": advancing,

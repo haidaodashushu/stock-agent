@@ -114,6 +114,9 @@ def _market_view(
             :TRADING_TEXT_LIMITS["market_view.summary"]
         ],
         "source": str(deterministic.get("source") or "model")[:40],
+        "data_status": deterministic.get("data_status", "unknown"),
+        "classification_usable": deterministic.get("classification_usable", False),
+        "interpretation_scope": deterministic.get("interpretation_scope", "unspecified"),
     }
 
 
@@ -242,6 +245,9 @@ def _validate_trial_rows(rows: list[dict], context: dict) -> None:
         if research and (needs_research or row.get("research_update") is not None):
             from data.stock_research import validate_update
             row["research_update"] = validate_update(row.get("research_update"),research)
+        if context.get("decision_assessment_required"):
+            from data.trading_assessment import validate
+            validate(row,facts[row["code"]],context)
         if row["action"] not in {"buy", "add"}:
             continue
         if research and (row.get("research_update") or {}).get("status") == "data_pending":

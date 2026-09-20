@@ -123,9 +123,11 @@ def fetch_market_indices(timeout: int = 10) -> dict[str, dict[str, Any]]:
         result[symbol] = {
             "name": fields[1] or symbols.get(symbol, symbol),
             "price": _round(price),
-            "change_pct": round((price - previous) / previous * 100, 2) if price and previous else 0.0,
+            "change_pct": round((price - previous) / previous * 100, 2) if price>0 and previous>0 else None,
             "amount": _round(fields[37]),
             "source": "tencent",
+            "source_time": fields[30].strip(),
+            "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     return result
 
@@ -1053,6 +1055,7 @@ def refresh_trading_state(
             "mode": mode,
             "daily_refresh": daily_refresh,
             "opportunity_trial": trial_on,
+            "decision_assessment_required": trial_on and trial.settings().get("decision_assessment",False),
             "focus_codes": sorted(focus or []),
             "monitored_candidates": monitored_count,
             "collection_started_at": now.strftime("%Y-%m-%d %H:%M:%S"),

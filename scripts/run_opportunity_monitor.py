@@ -68,6 +68,10 @@ def summary(store):
     from data.stock_research import ensure_tables
     ensure_tables(store)
     with store._get_conn() as conn:
+        has_assessments = conn.execute("SELECT 1 FROM sqlite_master WHERE name='trading_assessments'").fetchone()
+        assessments = [dict(r) for r in conn.execute("""SELECT mode,action,research_grade,timing_grade,evidence_grade,
+            portfolio_grade,COUNT(*) count FROM trading_assessments WHERE as_of>=?
+            GROUP BY mode,action,research_grade,timing_grade,evidence_grade,portfolio_grade""", (str(datetime.now().date()),))] if has_assessments else []
         return {
             "config":trial.settings(),
             "monitor":dict(conn.execute("SELECT COUNT(*) runs,SUM(scope_count) observations,SUM(quote_ok) valid,MAX(elapsed_seconds) slowest_seconds FROM opportunity_monitor_runs WHERE created_at>=?",(str(datetime.now().date()),)).fetchone()),
@@ -75,6 +79,7 @@ def summary(store):
             "recent_failures":[dict(r) for r in conn.execute("SELECT mode,code,kind,error,created_at FROM opportunity_events WHERE status='needs_review' ORDER BY id DESC LIMIT 10")],
             "plans":[dict(r) for r in conn.execute("SELECT mode,COUNT(*) count,MAX(reviewed_at) latest FROM opportunity_plans GROUP BY mode")],
             "research":[dict(r) for r in conn.execute("SELECT status,COUNT(*) count,MAX(evidence_as_of) latest FROM stock_research_profiles GROUP BY status")],
+            "assessments":assessments,
         }
 
 

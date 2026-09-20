@@ -125,6 +125,9 @@ def submit_trading_decision(
             from data.stock_research import record_updates, record_observations
             record_updates(store,validated,context)
             record_observations(store,mode,context)
+            if context.get("decision_assessment_required"):
+                from data.trading_assessment import record
+                record(store,mode,validated,context)
         enqueue_message(
             store=store, submission_key=claim.submission_key,
             message_type="text", content=report,

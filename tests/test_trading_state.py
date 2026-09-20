@@ -80,7 +80,7 @@ class TradingStateTests(unittest.TestCase):
         })
         self.assertEqual(strong["regime"], "strong")
         self.assertEqual(weak["regime"], "weak")
-        self.assertEqual(strong["source"], "deterministic_indices.v1")
+        self.assertEqual(strong["source"], "deterministic_indices.v2")
 
     def test_reads_every_candidate_for_the_trading_day(self):
         with tempfile.NamedTemporaryFile(suffix=".db") as db:

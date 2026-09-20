@@ -110,6 +110,11 @@ def _previous_decision_context(
                 "confidence": raw.get("confidence"),
                 "reason": str(raw.get("reason") or "")[:300],
                 "risk": str(raw.get("risk") or "")[:240],
+                "assessment_grades": {
+                    key:_object(value).get("grade")
+                    for key,value in _object(raw.get("assessment")).items()
+                    if key in {"research","timing","evidence","portfolio"}
+                },
             }
     return by_code, previous_round
 
@@ -497,10 +502,13 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
             "regime": market_context.get("regime") or {
                 "regime": "neutral",
                 "summary": "市场状态数据不可用，按中性处理",
-                "source": "deterministic_indices.v1",
+                "source": "unavailable",
+                "data_status": "unavailable",
+                "classification_usable": False,
+                "interpretation_scope": "index_snapshot_only; no reliable classification available",
             },
             "indices": [
-                {"name": row.get("name"), "change_pct": row.get("change_pct")}
+                {"name": row.get("name"), "change_pct": row.get("change_pct"), "source_time": row.get("source_time")}
                 for row in indices.values()
                 if isinstance(row, dict) and row.get("name")
             ],
@@ -615,7 +623,7 @@ def build_execution_context(
         raise ValueError(f"trading stage changed: requested {expected_stage}, current {stage}")
     compact = [
         _mode_stock(
-            _compact_stock(_object(row["payload"]), str(row["updated_at"])), mode,
+            _compact_stock(_object(row["payload"]), str(row["updated_at"]), include_research_details=True), mode,
         )
         for row in rows
     ]
@@ -639,5 +647,6 @@ def build_execution_context(
         "positions": positions,
         "candidates": candidates,
         "opportunity_trial": bool(_object(market.get("refresh")).get("opportunity_trial")),
+        "decision_assessment_required": bool(_object(market.get("refresh")).get("decision_assessment_required")),
         "required_evidence_codes": [row["code"] for row in [*positions, *candidates]],
     }

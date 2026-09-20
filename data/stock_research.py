@@ -60,6 +60,8 @@ def contexts(store, codes, setups, now=None):
                     reasons.append("research_expired")
                 if prior["status"] != "ready":
                     reasons.append("research_data_pending")
+                if trial.settings().get("decision_assessment") and not trial.obj(prior["profile"]).get("quality"):
+                    reasons.append("research_quality_unrated")
             result[code] = {
                 "status":"refresh_required" if reasons else "ready",
                 "reasons":reasons,"facts_version":version,
@@ -83,6 +85,9 @@ def validate_update(raw, research):
         if not isinstance(value,str) or not value.strip() or len(value)>300:
             raise ValueError(f"research_update.{field} requires 1..300 characters")
         result[field] = value.strip()
+    if raw.get("quality") is not None:
+        from data.trading_assessment import grade
+        result["quality"] = grade(raw["quality"],"research")
     return result
 
 
