@@ -40,8 +40,8 @@ python3 scripts/refresh_trading_cycle.py --mode live --stage 1102
    建议，避免建议过期后被 AI 误判为从未发生。两套 Cron 各自维护数据库版本和 `as_of`。
 
 3. 决策层：实盘 Cron 独立调用 AI，复用 `config/agent_trading_policy.md` 并使用
-   `config/agent_live_trading_prompt.md` 输出实盘专用决策 JSON。它看不到模拟账户或模拟动作，也不
-   依赖模拟 Cron 是否成功。
+   `config/agent_live_trading_prompt.md` 解释证据和形成策略判断；提交结构与动态约束来自
+   `trading_overview.decision_contract`。它看不到模拟账户或模拟动作，也不依赖模拟 Cron 是否成功。
 
 ```json
 {

@@ -27,7 +27,13 @@ class TradingCycleTests(unittest.TestCase):
             "as_of": "2026-07-14 10:30:10",
             "account": {"total_equity": 1_000_000},
             "positions": [{"code": "000001", "name": "模拟持仓股"}],
-            "candidates": [{"code": "000002", "name": "候选股"}],
+            "candidates": [{
+                "code": "000002", "name": "候选股",
+                "selection": {
+                    "entry_route": "early_start", "setup_stage": "actionable",
+                    "buy_eligible": True,
+                },
+            }],
         }
         self.live_context = {
             "status": "ok",
@@ -36,7 +42,13 @@ class TradingCycleTests(unittest.TestCase):
             "as_of": "2026-07-14 10:32:10",
             "account": {"total_equity": 20_000, "position_count": 1},
             "positions": [{"code": "000003", "name": "实盘持仓股", "volume": 100}],
-            "candidates": [{"code": "000002", "name": "候选股"}],
+            "candidates": [{
+                "code": "000002", "name": "候选股",
+                "selection": {
+                    "entry_route": "early_start", "setup_stage": "actionable",
+                    "buy_eligible": True,
+                },
+            }],
         }
 
     def test_extracts_fenced_json(self):
@@ -129,6 +141,16 @@ class TradingCycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not actionable/buy_eligible"):
             validate_simulated_decision(payload, context)
 
+    def test_executor_rejects_candidate_without_qualification_metadata(self):
+        context = dict(self.simulated_context)
+        context["candidates"] = [{"code": "000002", "name": "候选股"}]
+        payload = {"signals": [
+            {"code": "000001", "action": "hold"},
+            {"code": "000002", "action": "buy", "target_amount": 10_000},
+        ]}
+        with self.assertRaisesRegex(ValueError, "missing qualification metadata"):
+            validate_simulated_decision(payload, context)
+
     def test_simulated_rejects_live_only_code(self):
         payload = {"signals": [{"code": "000003", "action": "watch"}]}
         with self.assertRaisesRegex(ValueError, "not present"):
@@ -167,7 +189,13 @@ class TradingCycleTests(unittest.TestCase):
                 {"code": f"600{index:03d}", "name": f"持仓{index}"}
                 for index in range(position_count)
             ],
-            "candidates": [{"code": "000002", "name": "候选股"}],
+            "candidates": [{
+                "code": "000002", "name": "候选股",
+                "selection": {
+                    "entry_route": "early_start", "setup_stage": "actionable",
+                    "buy_eligible": True,
+                },
+            }],
         }
 
     @staticmethod
@@ -256,6 +284,17 @@ class TradingCycleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires target_amount or volume"):
             validate_live_decision(payload, self.live_context)
 
+    def test_live_buy_can_add_to_an_existing_position(self):
+        payload = {"decisions": [
+            {
+                "code": "000003", "action": "buy", "target_amount": 5_000,
+                "reason": "已有盈利仓位趋势继续确认",
+            },
+            {"code": "000002", "action": "watch"},
+        ]}
+        decision = validate_live_decision(payload, self.live_context)
+        self.assertEqual(decision["decisions"][0]["action"], "buy")
+
     def test_rejects_decision_that_omits_its_own_position(self):
         with self.assertRaisesRegex(ValueError, "simulated decision omitted"):
             validate_simulated_decision(
@@ -343,6 +382,59 @@ class TradingCycleTests(unittest.TestCase):
         text = render_report(self.simulated_context, "simulated", decision, {"results": []})
         self.assertNotIn("模拟持仓股（模拟持仓股", text)
         self.assertIn("模拟持仓股（000001）等待确认", text)
+
+    def test_live_report_lists_every_position_decision_and_reason(self):
+        positions = [
+            {"code": f"600{index:03d}", "name": f"持仓{index}"}
+            for index in range(15)
+        ]
+        context = {
+            "mode": "live",
+            "stage": "1032",
+            "as_of": "2026-09-07 10:30:00",
+            "positions": positions,
+            "candidates": [{"code": "000001", "name": "候选股"}],
+        }
+        decision = {
+            "signals": [
+                {
+                    "code": row["code"],
+                    "name": row["name"],
+                    "action": "hold" if index else "clear",
+                    "confidence": "medium",
+                    "reason": f"第{index}只持仓的独立判断依据",
+                }
+                for index, row in enumerate(positions)
+            ] + [{
+                "code": "000001", "name": "候选股", "action": "watch",
+                "confidence": "weak", "reason": "候选股判断不属于持仓判断",
+            }],
+        }
+
+        text = render_report(context, "live", decision, {"results": []})
+
+        self.assertIn("**持仓判断**", text)
+        for index, row in enumerate(positions):
+            with self.subTest(code=row["code"]):
+                self.assertIn(row["code"], text)
+                self.assertIn(f"第{index}只持仓的独立判断依据", text)
+        self.assertNotIn("候选股判断不属于持仓判断", text)
+
+    def test_simulated_report_keeps_summary_only_format(self):
+        decision = {
+            "signals": [{
+                "code": "000001", "name": "模拟持仓股", "action": "hold",
+                "confidence": "medium", "reason": "逐股原因不应出现在模拟盘消息中",
+            }],
+            "report": {"focus": ["继续观察组合变化"]},
+        }
+
+        text = render_report(
+            self.simulated_context, "simulated", decision, {"results": []},
+        )
+
+        self.assertNotIn("**持仓判断**", text)
+        self.assertNotIn("逐股原因不应出现在模拟盘消息中", text)
 
     def test_preserves_all_concise_focus_items(self):
         payload = {

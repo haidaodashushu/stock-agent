@@ -53,6 +53,10 @@ config/*.local.json
 *.pem
 *.key
 
+# Host-local reverse proxy, certificate, and deployment overrides
+deploy/nginx/
+deploy/letsencrypt/
+
 # Temporary downloads
 temp_download/
 

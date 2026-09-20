@@ -38,8 +38,7 @@ from data.services.candidate_enrichment_service import (
 )
 from data.store.sqlite_store import StockStore
 from data.watchlist_config import list_items as list_watchlist_items
-
-BLOCKED_CODE_PREFIXES = ("688", "8", "4")
+from data.security_universe import is_supported_board_code
 
 
 def _name_map(conn) -> Dict[str, str]:
@@ -289,7 +288,7 @@ def run_scan(
 
 
 def _is_tradeable(code: str) -> bool:
-    return not str(code).startswith(BLOCKED_CODE_PREFIXES)
+    return is_supported_board_code(code)
 
 
 def main() -> int:

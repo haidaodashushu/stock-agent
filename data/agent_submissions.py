@@ -67,6 +67,7 @@ def claim_submission(
     provider: str,
     model: str,
     decision: dict[str, Any],
+    prompt_version: str = "",
 ) -> ClaimResult:
     """Atomically claim a validated decision, or report its prior state."""
     key = submission_key(task, mode, as_of)
@@ -86,9 +87,12 @@ def claim_submission(
         conn.execute(
             """INSERT INTO agent_decision_submissions
                (submission_key, task, mode, as_of, stage, provider, model,
-                status, decision, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?)""",
-            (key, task, mode, as_of, stage, provider, model, _json(decision), _now()),
+                prompt_version, status, decision, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?)""",
+            (
+                key, task, mode, as_of, stage, provider, model, prompt_version,
+                _json(decision), _now(),
+            ),
         )
         conn.commit()
         return ClaimResult(state="claimed", submission_key=key)
@@ -217,6 +221,7 @@ def agent_runtime_health(*, store: StockStore) -> dict[str, Any]:
         {
             "task": row["task"], "mode": row["mode"], "status": row["status"],
             "provider": row["provider"], "model": row["model"],
+            "prompt_version": row["prompt_version"],
             "as_of": row["as_of"], "created_at": row["created_at"],
             "error": row["error"],
         }

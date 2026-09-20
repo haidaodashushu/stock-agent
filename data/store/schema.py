@@ -756,6 +756,7 @@ CREATE TABLE IF NOT EXISTS agent_decision_submissions (
     stage          TEXT DEFAULT '',
     provider       TEXT NOT NULL,
     model          TEXT NOT NULL,
+    prompt_version TEXT NOT NULL DEFAULT '',
     status         TEXT NOT NULL CHECK (status IN ('processing','ready','failed')),
     decision       TEXT NOT NULL DEFAULT '{}',
     result         TEXT NOT NULL DEFAULT '{}',

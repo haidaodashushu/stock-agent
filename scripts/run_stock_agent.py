@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
+import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -16,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from data.agent_runtime import CodexCliProvider  # noqa: E402
+from config.runtime_paths import configurable_path  # noqa: E402
 from data.agent_submissions import get_submission  # noqa: E402
 from data.candidate_promotion import get_promotion_overview  # noqa: E402
 from data.candidate_promotion import record_promotion_failure  # noqa: E402
@@ -23,13 +27,41 @@ from data.stock_selection_repository import get_selection_overview  # noqa: E402
 from data.store.sqlite_store import StockStore  # noqa: E402
 from data.trading_decision_repository import get_trading_overview  # noqa: E402
 
-TASKS = {"selection", "promotion", "trading-simulated", "trading-live"}
-PROMPTS = {
-    "selection": ROOT / "config" / "agent_stock_selection_prompt.md",
-    "promotion": ROOT / "config" / "agent_candidate_promotion_prompt.md",
-    "trading-simulated": ROOT / "config" / "agent_simulated_trading_prompt.md",
-    "trading-live": ROOT / "config" / "agent_live_trading_prompt.md",
+ENTRY_POLICY = ROOT / "config" / "agent_stock_entry_policy.md"
+TRADING_POLICY = ROOT / "config" / "agent_trading_policy.md"
+
+
+@dataclass(frozen=True)
+class TaskSpec:
+    prompt: Path
+    policies: tuple[Path, ...]
+    submit_tool: str
+
+
+TASK_SPECS = {
+    "selection": TaskSpec(
+        ROOT / "config" / "agent_stock_selection_prompt.md",
+        (ENTRY_POLICY,),
+        "submit_stock_selection",
+    ),
+    "promotion": TaskSpec(
+        ROOT / "config" / "agent_candidate_promotion_prompt.md",
+        (ENTRY_POLICY,),
+        "submit_candidate_promotion",
+    ),
+    "trading-simulated": TaskSpec(
+        ROOT / "config" / "agent_simulated_trading_prompt.md",
+        (ENTRY_POLICY, TRADING_POLICY),
+        "submit_trading_decision",
+    ),
+    "trading-live": TaskSpec(
+        ROOT / "config" / "agent_live_trading_prompt.md",
+        (ENTRY_POLICY, TRADING_POLICY),
+        "submit_trading_decision",
+    ),
 }
+TASKS = set(TASK_SPECS)
+PROMPTS = {task: spec.prompt for task, spec in TASK_SPECS.items()}
 
 
 def _safe(value: str) -> str:
@@ -49,24 +81,34 @@ def _task_snapshot(task: str) -> tuple[str, str, dict[str, Any]]:
 
 
 def _submission_instruction(task: str) -> str:
-    tool = {
-        "selection": "submit_stock_selection",
-        "promotion": "submit_candidate_promotion",
-        "trading-simulated": "submit_trading_decision",
-        "trading-live": "submit_trading_decision",
-    }[task]
+    tool = TASK_SPECS[task].submit_tool
     return f"""
 
-## 本运行时的提交约束
+## 运行时提交
 
-上面的“只返回 JSON”描述的是你要形成的完整决策对象，不是最终聊天文本。
-你必须先按要求调用全部只读证据工具，然后调用 `{tool}`，将 overview.as_of 原样作为
-`as_of`，把完整 JSON 对象作为 `decision`。只有工具返回 `submitted` 或
-`already_submitted` 才算任务完成。若返回 `rejected` 且 `can_retry=true`，根据原因修正后
-重新提交；若返回 `failed` 或 `blocked`，不得尝试绕过或改用命令/文件/数据库写入。
-不要读取项目文件、运行 shell、访问网络或使用 MCP 之外的事实。最终回复只简述提交状态；
-最终回复本身不会触发选股、晋升、成交或建议单。
+完成证据读取和判断后调用 `{tool}`。提交对象必须遵循 overview 返回的
+`decision_contract`，并原样使用 overview.as_of。只有工具返回 `submitted` 或
+`already_submitted` 才算完成；可重试的拒绝按返回原因修正一次，不得绕过工具写入。
+最终回复只简述提交状态，回复文本本身不产生业务结果。
 """
+
+
+def compose_prompt(task: str) -> str:
+    """Assemble one task from declarative policy dependencies."""
+    spec = TASK_SPECS[task]
+    paths = [*spec.policies, spec.prompt]
+    parts = [path.read_text(encoding="utf-8").strip() for path in paths]
+    return "\n\n".join(parts) + _submission_instruction(task)
+
+
+def resolve_model(explicit: str = "") -> str:
+    """Use one model for the actual call, MCP submission, and run metadata."""
+    override = explicit.strip() or os.environ.get("STOCK_AGENT_MODEL", "").strip()
+    if override:
+        return override
+    path = configurable_path("STOCK_RUNTIME_CONFIG", "config/runtime.local.json")
+    config = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    return str(config.get("agent", {}).get("model") or "gpt-5.6-sol").strip()
 
 
 def main() -> int:
@@ -83,6 +125,7 @@ def main() -> int:
     parser.add_argument("--run-root", default=str(ROOT / "data" / "agent_runs"))
     parser.add_argument("--report-out", default="")
     args = parser.parse_args()
+    args.model = resolve_model(args.model)
     if args.provider != "codex-cli":
         print(f"unsupported agent provider: {args.provider}", file=sys.stderr)
         return 2
@@ -111,23 +154,14 @@ def main() -> int:
         print(f"another {args.task} agent run is active", file=sys.stderr)
         return 75
 
-    prompt_parts = []
-    if args.task in {"promotion", "trading-simulated", "trading-live"}:
-        prompt_parts.append(
-            (ROOT / "config" / "agent_stock_entry_policy.md").read_text(encoding="utf-8")
-        )
-    if args.task in {"trading-simulated", "trading-live"}:
-        prompt_parts.append(
-            (ROOT / "config" / "agent_trading_policy.md").read_text(encoding="utf-8")
-        )
-    prompt_parts.append(PROMPTS[args.task].read_text(encoding="utf-8"))
-    prompt = "\n\n".join(prompt_parts) + _submission_instruction(args.task)
+    prompt = compose_prompt(args.task)
+    prompt_version = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     # Keep the virtualenv launcher path intact; resolving the symlink would
     # silently switch the MCP process back to the system interpreter.
     python = str(ROOT / ".venv" / "bin" / "python")
     common = [
         "--run-dir", str(run_dir), "--provider", args.provider,
-        "--model", args.model or "gpt-5.6-sol",
+        "--model", args.model, "--prompt-version", prompt_version,
     ]
     if args.task == "selection":
         mcp_script = ROOT / "scripts" / "stock_selection_mcp.py"
@@ -146,11 +180,12 @@ def main() -> int:
     (run_dir / "run.json").write_text(json.dumps({
         "task": args.task, "db_task": db_task, "mode": mode, "stage": args.stage,
         "as_of": as_of, "provider": args.provider,
-        "model": args.model or "gpt-5.6-sol", "started_at": datetime.now().isoformat(),
+        "model": args.model, "prompt_version": prompt_version,
+        "started_at": datetime.now().isoformat(),
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     try:
         provider = CodexCliProvider(
-            executable=args.codex_bin or None, model=args.model or None,
+            executable=args.codex_bin or None, model=args.model,
             timeout_seconds=args.timeout,
         )
         attempts = []

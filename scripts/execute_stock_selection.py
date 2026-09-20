@@ -14,15 +14,14 @@ sys.path.insert(0, str(ROOT))
 
 from data.stock_selection_repository import get_staged_rows  # noqa: E402
 from data.candidate_board import refresh_candidate_board  # noqa: E402
+from data.agent_decision_contracts import (  # noqa: E402
+    CONFIDENCES,
+    ENTRY_ROUTES,
+    SELECTION_MAX_RESULTS as MAX_SELECTIONS,
+)
 from data.store.sqlite_store import StockStore  # noqa: E402
 from scripts.daily_screen import _build_screening_report, _save_screen_results  # noqa: E402
 from scripts.execute_trading_cycle import extract_json  # noqa: E402
-
-CONFIDENCES = {"strong", "medium", "weak"}
-REGIMES = {"strong", "neutral", "weak"}
-ENTRY_ROUTES = {"early_start", "strong_continuation"}
-MAX_SELECTIONS = 10
-
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
@@ -91,9 +90,6 @@ def validate_selection(
         })
 
     market_raw = payload.get("market_view") if isinstance(payload.get("market_view"), dict) else {}
-    regime = _text(market_raw.get("regime") or "neutral").lower()
-    if regime not in REGIMES:
-        raise ValueError(f"invalid market regime: {regime}")
     report_raw = payload.get("report") if isinstance(payload.get("report"), dict) else {}
     focus_raw = report_raw.get("focus") if isinstance(report_raw.get("focus"), list) else []
     return {
@@ -102,7 +98,6 @@ def validate_selection(
         "as_of": expected_as_of,
         "reviewed_codes": reviewed_codes,
         "market_view": {
-            "regime": regime,
             "summary": _text(market_raw.get("summary")),
         },
         "selections": selections,

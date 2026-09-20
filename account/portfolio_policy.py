@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from data.security_universe import DEFAULT_BLOCKED_BOARD_PREFIXES
+
 
 SIM_TARGET_MIN_POSITIONS = 10
 SIM_TARGET_MAX_POSITIONS = 12
@@ -25,7 +27,7 @@ def simulated_account_policy(
     else:
         capacity_state = "below_target"
     return {
-        "blocked_prefixes": ["688", "8", "4"],
+        "blocked_prefixes": list(DEFAULT_BLOCKED_BOARD_PREFIXES),
         "position_target": {
             "min": SIM_TARGET_MIN_POSITIONS,
             "max": SIM_TARGET_MAX_POSITIONS,

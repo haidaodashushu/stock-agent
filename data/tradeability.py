@@ -13,6 +13,8 @@ from typing import Any
 
 import pandas as pd
 
+from data.security_universe import is_supported_board_code
+
 
 LIQUIDITY_WINDOW = 20
 MIN_AVG_DAILY_NOTIONAL = 20_000_000.0
@@ -57,7 +59,7 @@ def assess_tradeability(
     metrics: dict[str, Any] = {}
     code = str(code or "").zfill(6)
 
-    if code.startswith(("688", "8", "4")):
+    if not is_supported_board_code(code):
         reasons.append("blocked_board")
     if not is_active:
         reasons.append("inactive")

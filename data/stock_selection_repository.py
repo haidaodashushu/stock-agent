@@ -16,13 +16,17 @@ from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 from data.news_evidence import build_news_evidence, match_policy_evidence, recent_policy_evidence
 from data.candidate_lifecycle import record_discoveries
+from data.agent_decision_contracts import (
+    SELECTION_EVIDENCE_MAX_CODES,
+    selection_decision_contract,
+)
 
 if TYPE_CHECKING:
     from data.store.sqlite_store import StockStore
 
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = Path(os.environ.get("STOCK_DB_PATH") or ROOT / "data" / "stock_data.db")
-MAX_EVIDENCE_CODES = 40
+MAX_EVIDENCE_CODES = SELECTION_EVIDENCE_MAX_CODES
 
 
 def _stock_store(store: StockStore | None = None) -> StockStore:
@@ -210,6 +214,7 @@ def get_selection_overview(*, db_path: Path | None = None) -> dict[str, Any]:
         lifecycle_by_code = {
             str(row["code"]).zfill(6): dict(row) for row in lifecycle_rows
         }
+        policy_context = recent_policy_evidence(conn, str(state["as_of"]))
     # Keep the overview as a complete, compact index.  Rich per-stock evidence
     # belongs exclusively to candidate_evidence; duplicating it here made a
     # 90-100 stock overview exceed the MCP result envelope and hid the tail of
@@ -238,10 +243,13 @@ def get_selection_overview(*, db_path: Path | None = None) -> dict[str, Any]:
             "promotion_ready": lifecycle.get("state") == "actionable",
             "theme": row["theme_group"] or (concepts[0] if concepts else ""),
         })
+    market = _object(state["market_context"])
+    market["policy_context"] = policy_context
     return {
         "schema": "stock_selection_overview.v1",
         "as_of": state["as_of"],
         "status": state["status"],
+        "decision_contract": selection_decision_contract(),
         "run": {
             "date": state["run_date"],
             "time": state["run_time"],
@@ -249,7 +257,7 @@ def get_selection_overview(*, db_path: Path | None = None) -> dict[str, Any]:
             "target": state["target"],
             "daily_data_through": state["expected_daily_date"],
         },
-        "market": _object(state["market_context"]),
+        "market": market,
         "candidate_count": len(candidates),
         "coverage": coverage,
         "candidates": candidates,
@@ -462,7 +470,6 @@ def get_candidate_evidence(
         "schema": "stock_selection_evidence.v1",
         "as_of": state["as_of"],
         "count": len(evidence_rows),
-        "policy_context": policy_context,
         "stocks": evidence_rows,
     }
 

@@ -939,6 +939,11 @@ def refresh_trading_state(
             "blocked_prefixes": list(live_blocked_prefixes(live_cfg)),
             "max_positions": live_cfg.get("max_positions"),
             "buy_lot_size": 100,
+            "t_plus_1": True,
+            "max_decision_price_drift_pct": float(
+                live_cfg.get("max_decision_price_drift_pct") or 2.0
+            ),
+            "buy_limit_buffer_pct": float(live_cfg.get("buy_limit_buffer_pct") or 0.5),
         }
         sim_activity = {}
 

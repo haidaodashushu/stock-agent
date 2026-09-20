@@ -67,6 +67,15 @@ class StockStore:
                 """INSERT OR IGNORE INTO bot_inbound_messages
                    SELECT * FROM feishu_inbound_messages"""
             )
+            submission_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(agent_decision_submissions)")
+            }
+            if "prompt_version" not in submission_columns:
+                conn.execute(
+                    "ALTER TABLE agent_decision_submissions "
+                    "ADD COLUMN prompt_version TEXT NOT NULL DEFAULT ''"
+                )
             conn.commit()
             logger.info(f"数据库初始化完成: {self.db_path}")
         except Exception as e:

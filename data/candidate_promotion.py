@@ -20,11 +20,13 @@ from data.candidate_observations import (
 )
 from data.store.sqlite_store import StockStore
 from data.market_regime import classify_market_regime
-
-
-PROMOTION_DECISIONS = {"promote", "watch", "reject"}
-ENTRY_ROUTES = {"early_start", "strong_continuation"}
-CONFIDENCES = {"strong", "medium", "weak"}
+from data.agent_decision_contracts import (
+    CONFIDENCES,
+    ENTRY_ROUTES,
+    PROMOTION_DECISIONS,
+    PROMOTION_TEXT_LIMITS,
+    promotion_decision_contract,
+)
 
 
 def _float(value: Any, default: float = 0.0) -> float:
@@ -214,6 +216,7 @@ def get_promotion_overview(store: StockStore | None = None) -> dict[str, Any]:
         "as_of": snapshot["as_of"],
         "source_fingerprint": snapshot["source_fingerprint"],
         "market": snapshot["market"],
+        "decision_contract": promotion_decision_contract(),
         "candidate_count": len(snapshot["candidates"]),
         "candidates": [
             {
@@ -280,12 +283,12 @@ def _normalized_decisions(payload: dict[str, Any], required: list[str]) -> list[
             route = "unclassified"
         normalized.append({
             "code": code,
-            "name": str(raw.get("name") or "")[:40],
+            "name": str(raw.get("name") or "")[:PROMOTION_TEXT_LIMITS["name"]],
             "decision": decision,
             "entry_route": route,
             "confidence": confidence,
-            "reason": str(raw.get("reason") or "")[:300],
-            "risk": str(raw.get("risk") or "")[:240],
+            "reason": str(raw.get("reason") or "")[:PROMOTION_TEXT_LIMITS["reason"]],
+            "risk": str(raw.get("risk") or "")[:PROMOTION_TEXT_LIMITS["risk"]],
         })
         seen.add(code)
     if seen != required_set:

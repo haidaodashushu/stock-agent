@@ -23,14 +23,20 @@ from account.portfolio_policy import (  # noqa: E402
 )
 from data.market_calendar import ensure_actionable_trading_time  # noqa: E402
 from data.trading_decision_repository import build_execution_context  # noqa: E402
+from data.agent_decision_contracts import (  # noqa: E402
+    CONFIDENCES,
+    ENTRY_ROUTES,
+    LIVE_ACTIONS,
+    SIMULATED_ACTIONS as SIM_ACTIONS,
+    TRADING_TEXT_LIMITS,
+)
 
-SIM_ACTIONS = {"buy", "add", "hold", "reduce", "sell", "clear", "watch", "noop"}
-LIVE_ACTIONS = {"buy", "sell", "hold", "watch", "noop"}
-CONFIDENCES = {"strong", "medium", "weak"}
 ACTION_NAMES = {
     "buy": "买入", "add": "加仓", "hold": "持有", "reduce": "减仓",
     "sell": "卖出", "clear": "清仓", "watch": "观察", "noop": "不操作",
 }
+CONFIDENCE_NAMES = {"strong": "强", "medium": "中", "weak": "弱"}
+TRADING_REPORT_MAX_CHARS = 8000
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -73,13 +79,15 @@ def _normalize_rows(
             "code": code,
             "action": action,
             "confidence": confidence,
-            "reason": str(raw.get("reason") or "")[:180],
-            "risk": str(raw.get("risk") or "")[:150],
+            "reason": str(raw.get("reason") or "")[:TRADING_TEXT_LIMITS["reason"]],
+            "risk": str(raw.get("risk") or "")[:TRADING_TEXT_LIMITS["risk"]],
             "replacement_code": str(raw.get("replacement_code") or "").strip().zfill(6)
             if str(raw.get("replacement_code") or "").strip()
             else "",
             "replacement_edge": str(raw.get("replacement_edge") or "").strip().lower(),
-            "replacement_reason": str(raw.get("replacement_reason") or "")[:180],
+            "replacement_reason": str(raw.get("replacement_reason") or "")[
+                :TRADING_TEXT_LIMITS["replacement_reason"]
+            ],
         })
         normalized.append(item)
     return normalized
@@ -102,7 +110,9 @@ def _market_view(
         regime = "neutral"
     return {
         "regime": regime,
-        "summary": str(value.get("summary") or fallback)[:100],
+        "summary": str(value.get("summary") or fallback)[
+            :TRADING_TEXT_LIMITS["market_view.summary"]
+        ],
         "source": str(deterministic.get("source") or "model")[:40],
     }
 
@@ -110,10 +120,13 @@ def _market_view(
 def _report(payload: dict[str, Any]) -> dict[str, Any]:
     value = payload.get("report") if isinstance(payload.get("report"), dict) else {}
     return {
-        "focus": [str(item)[:80] for item in value.get("focus", [])]
+        "focus": [
+            str(item)[:TRADING_TEXT_LIMITS["report.focus_item"]]
+            for item in value.get("focus", [])
+        ]
         if isinstance(value.get("focus"), list)
         else [],
-        "risk": str(value.get("risk") or "")[:100],
+        "risk": str(value.get("risk") or "")[:TRADING_TEXT_LIMITS["report.risk"]],
     }
 
 
@@ -175,9 +188,16 @@ def _require_complete_decision_rows(
         )
 
 
-def _validate_new_entry_gate(row: dict[str, Any], candidates: list[dict]) -> None:
-    """Apply persisted route/lifecycle eligibility as an execution hard gate."""
-    if row.get("action") != "buy":
+def _validate_new_entry_gate(
+    row: dict[str, Any], candidates: list[dict], position_codes: set[str],
+) -> None:
+    """Apply candidate qualification only when a buy creates a new position.
+
+    Live trading intentionally uses ``buy`` for both entries and additions.
+    Positions are excluded from the candidate list, so treating every live buy
+    as a new entry made legitimate additions impossible.
+    """
+    if row.get("action") != "buy" or row.get("code") in position_codes:
         return
     candidate = next(
         (item for item in candidates if str(item.get("code") or "").zfill(6) == row["code"]),
@@ -187,9 +207,9 @@ def _validate_new_entry_gate(row: dict[str, Any], candidates: list[dict]) -> Non
         raise ValueError(f"{row['code']}: new buy requires an active candidate")
     selection = candidate.get("selection")
     if not isinstance(selection, dict) or not selection:
-        return
+        raise ValueError(f"{row['code']}: active candidate is missing qualification metadata")
     route = str(selection.get("entry_route") or "")
-    if route not in {"early_start", "strong_continuation"}:
+    if route not in ENTRY_ROUTES:
         raise ValueError(f"{row['code']}: entry route {route or '<empty>'} is not enabled")
     if selection.get("setup_stage") != "actionable" or selection.get("buy_eligible") is not True:
         raise ValueError(
@@ -238,7 +258,7 @@ def validate_simulated_decision(
     }
     position_codes = set(position_by_code)
     for row in signals:
-        _validate_new_entry_gate(row, candidates)
+        _validate_new_entry_gate(row, candidates, position_codes)
         if row["action"] in {"buy", "add"}:
             try:
                 target_amount = float(row.get("target_amount") or 0)
@@ -359,7 +379,7 @@ def validate_live_decision(
         if isinstance(row, dict)
     }
     for row in decisions:
-        _validate_new_entry_gate(row, candidates)
+        _validate_new_entry_gate(row, candidates, position_codes)
         if row["action"] == "sell" and row["code"] not in position_codes:
             raise ValueError(f"{row['code']}: live sell requires a live shadow position")
         if row["action"] == "buy":
@@ -460,6 +480,44 @@ def _render_stock_references(value: Any, names: dict[str, str]) -> str:
     return pattern.sub(replace, text)
 
 
+def _position_decision_lines(
+    context: dict[str, Any], decision: dict[str, Any], names: dict[str, str],
+) -> list[str]:
+    """Render the submitted conclusion for every position in snapshot order."""
+    positions = context.get("positions") if isinstance(context.get("positions"), list) else []
+    decision_rows: list[Any] = []
+    for key in ("signals", "decisions"):
+        value = decision.get(key)
+        if isinstance(value, list):
+            decision_rows.extend(value)
+    by_code = {
+        str(row.get("code") or "").strip().zfill(6): row
+        for row in decision_rows
+        if isinstance(row, dict) and str(row.get("code") or "").strip()
+    }
+
+    lines: list[str] = []
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        raw_code = str(position.get("code") or "").strip()
+        if not raw_code:
+            continue
+        code = raw_code.zfill(6)
+        name = str(position.get("name") or names.get(code) or "").strip()
+        row = by_code.get(code)
+        if row is None:
+            lines.append(f"- `{code} {name}`：未形成有效决策")
+            continue
+        action = ACTION_NAMES.get(str(row.get("action") or ""), str(row.get("action") or "未知"))
+        confidence = CONFIDENCE_NAMES.get(
+            str(row.get("confidence") or ""), str(row.get("confidence") or "未知"),
+        )
+        reason = _render_stock_references(row.get("reason") or "未提供原因", names)
+        lines.append(f"- `{code} {name}`：{action}（置信度{confidence}）— {reason}")
+    return lines
+
+
 def render_report(
     context: dict[str, Any], mode: str, decision: dict[str, Any], result: dict[str, Any],
 ) -> str:
@@ -494,6 +552,12 @@ def render_report(
         lines.append("- 本轮无成交。" if mode == "simulated" else "- 本轮无新实盘建议单。")
     if result.get("error"):
         lines.append(f"- ⚠️ 执行层异常：{result['error']}")
+    position_lines = (
+        _position_decision_lines(context, decision, stock_names)
+        if mode == "live" else []
+    )
+    if position_lines:
+        lines.extend(["", "**持仓判断**"] + position_lines)
     report = decision.get("report") if isinstance(decision.get("report"), dict) else {}
     focus = report.get("focus") if isinstance(report.get("focus"), list) else []
     if focus:
@@ -512,7 +576,7 @@ def render_report(
         f"数据截至 {context.get('as_of', '-')}；事实已刷新并写入数据库，资金流为可选因子。"
         f"本任务{boundary}。",
     ])
-    return "\n".join(lines)[:3800]
+    return "\n".join(lines)[:TRADING_REPORT_MAX_CHARS]
 
 
 def _failed_decision(mode: str, error: str) -> dict[str, Any]:

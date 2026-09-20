@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from config.runtime_paths import configurable_path
+from data.security_universe import (
+    DEFAULT_BLOCKED_BOARD_PREFIXES as BLOCKED_PREFIXES,
+    is_supported_board_code,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 POOL_PATH = configurable_path(
     "STOCK_STRATEGIC_THEME_POOL_CONFIG", "config/strategic_theme_pool.local.json",
 )
-BLOCKED_PREFIXES = ("688", "8", "4")
 
 
 class StrategicPoolError(ValueError):
@@ -42,7 +45,7 @@ def load_strategic_pool(path: Path = POOL_PATH) -> dict[str, Any]:
             if not isinstance(row, list) or len(row) != 2:
                 raise StrategicPoolError(f"invalid pool row in {group_name}: {row!r}")
             code, name = str(row[0]).strip(), str(row[1]).strip()
-            if not re.fullmatch(r"\d{6}", code) or code.startswith(BLOCKED_PREFIXES):
+            if not re.fullmatch(r"\d{6}", code) or not is_supported_board_code(code):
                 raise StrategicPoolError(f"invalid or blocked pool code: {code!r}")
             if not name or code in stocks:
                 raise StrategicPoolError(f"missing name or duplicate pool code: {code}")

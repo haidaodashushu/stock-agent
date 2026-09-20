@@ -20,6 +20,10 @@ from strategy.selector.technical_scoring import TechnicalScoringSelector
 from data.loader import DataLoader
 from data.store.sqlite_store import StockStore
 from data.tradeability import assess_tradeability
+from data.security_universe import (
+    DEFAULT_BLOCKED_BOARD_PREFIXES as BLOCKED_CODE_PREFIXES,
+    is_supported_board_code,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,17 +34,9 @@ THEME_FREE_SLOTS = 2
 THEME_CONCENTRATION_STEP = 0.8
 THEME_CONCENTRATION_CAP = 2.4
 
-# 禁止交易的板块前缀
-BLOCKED_CODE_PREFIXES = (
-    "688",   # 科创板
-    "8",     # 北交所（83xxxx / 87xxxx 等）
-    "4",     # 北交所（43xxxx / 83xxxx 等老代码）
-)
-
-
 def is_tradeable(code: str) -> bool:
     """判断股票是否可交易（非科创板、非北证）"""
-    return not code.startswith(BLOCKED_CODE_PREFIXES)
+    return is_supported_board_code(code)
 
 
 def filter_tradeable(codes: list) -> list:

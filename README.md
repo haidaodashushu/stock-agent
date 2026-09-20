@@ -211,7 +211,8 @@ the destination host before enabling scheduled jobs.
 Tracked content:
 
 - `account/`, `data/`, `engine/`, `strategy/`, `scripts/`, `web/`: platform source code.
-- `config/agent_trading_policy.md` plus the simulated/live prompt files: shared strategy and account-isolated AI contracts.
+- `config/agent_*prompt.md` and `config/agent_*policy.md`: evidence semantics and decision strategy;
+  executable contracts live in `data/agent_decision_contracts.py`.
 - `config/*.example.json`: safe templates for user-specific runtime configuration.
 - `docs/` and `tests/`: architecture, operations and verification.
 

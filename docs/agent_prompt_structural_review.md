@@ -1,5 +1,8 @@
 # Agent Prompt 结构性评审
 
+> 状态：本文是 2026-09-04 重构前的评审快照，用于保留问题背景，不作为当前架构说明。当前设计见
+> `docs/agent_prompt_architecture.md`。
+
 本文评审选股、晋升、操盘四个任务 Prompt 的**结构性问题**，即 Prompt 与系统能力之间的错配。
 
 与 `docs/agent_prompt_review.md` 的区别：那份记录的是实现层缺陷（写错、写漏、与执行层常量不同步），

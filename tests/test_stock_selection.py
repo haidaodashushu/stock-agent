@@ -145,6 +145,7 @@ class StockSelectionRepositoryTests(unittest.TestCase):
         evidence = get_candidate_evidence(
             ["000002"], self.as_of, db_path=Path(self.handle.name),
         )
+        overview = get_selection_overview(db_path=Path(self.handle.name))
 
         news = evidence["stocks"][0]["recent_news"][0]
         self.assertEqual(news["analysis_basis"], "title_content")
@@ -154,7 +155,7 @@ class StockSelectionRepositoryTests(unittest.TestCase):
             evidence["stocks"][0]["matched_policy_evidence"][0]["matched_topics"],
             ["人工智能"],
         )
-        self.assertIn("人工智能", evidence["policy_context"][0]["summary"])
+        self.assertIn("人工智能", overview["market"]["policy_context"][0]["summary"])
 
     def test_ai_publish_is_atomic_and_records_selection_metadata(self):
         selection = {

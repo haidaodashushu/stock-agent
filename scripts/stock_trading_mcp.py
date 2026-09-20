@@ -26,6 +26,7 @@ parser.add_argument("--stage", required=True)
 parser.add_argument("--run-dir", required=True)
 parser.add_argument("--provider", default="codex-cli")
 parser.add_argument("--model", default="gpt-5.6-sol")
+parser.add_argument("--prompt-version", default="")
 parser.add_argument("--dry-run", action="store_true")
 args = parser.parse_args()
 MODE = args.mode
@@ -71,7 +72,7 @@ def submit_trading_decision(as_of: str, decision: dict) -> dict:
     return submit_decision(
         mode=MODE, stage=STAGE, as_of=as_of, decision=decision,
         run_dir=RUN_DIR, provider=args.provider, model=args.model,
-        dry_run=args.dry_run,
+        prompt_version=args.prompt_version, dry_run=args.dry_run,
     )
 
 

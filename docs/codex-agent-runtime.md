@@ -9,6 +9,10 @@
 5. 飞书入站由独立的 `stock-feishu-listener.service` 消费事件；先表情确认，再按消息幂等处理并回复，
    不与半小时交易、候选晋升或夜间选股的调度进程共用生命周期。
 
+Prompt 只维护证据解释和决策策略。动作、值域、字段、批量与账户动态约束统一由
+`data/agent_decision_contracts.py` 生成，并通过 overview 的 `decision_contract` 返回；完整 Prompt 的内容哈希随提交落库。
+详见 `docs/agent_prompt_architecture.md`。
+
 定时决策模型没有任意 SQL、任意数据库写入或券商接口。模拟盘可按既有规则自动成交；实盘仍只生成供人工核对的建议单。
 飞书入站中的成交回报不经过模型，直接由受控本地事务回填；其他授权消息才进入独立 Codex 任务。
 

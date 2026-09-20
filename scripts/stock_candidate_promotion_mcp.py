@@ -24,6 +24,7 @@ parser = argparse.ArgumentParser(description="Candidate-promotion agent MCP")
 parser.add_argument("--run-dir")
 parser.add_argument("--provider", default="codex-cli")
 parser.add_argument("--model", default="gpt-5.6-sol")
+parser.add_argument("--prompt-version", default="")
 parser.add_argument("--check", action="store_true")
 args = parser.parse_args()
 RUN_DIR = Path(args.run_dir).resolve() if args.run_dir else None
@@ -62,7 +63,7 @@ def submit_candidate_promotion(as_of: str, decision: dict) -> dict:
         return {"status": "rejected", "reason": "MCP server has no run directory"}
     return submit_promotion(
         as_of=as_of, decision=decision,
-        provider=args.provider, model=args.model,
+        provider=args.provider, model=args.model, prompt_version=args.prompt_version,
     )
 
 

@@ -59,6 +59,7 @@ def submit_trading_decision(
     run_dir: Path,
     provider: str,
     model: str,
+    prompt_version: str = "",
     dry_run: bool = False,
     store: StockStore | None = None,
 ) -> dict[str, Any]:
@@ -77,6 +78,7 @@ def submit_trading_decision(
     claim = claim_submission(
         store=store, task="trading", mode=mode, as_of=as_of, stage=stage,
         provider=provider, model=model, decision=validated,
+        prompt_version=prompt_version,
     )
     if claim.state != "claimed":
         return _existing_response(claim)
@@ -140,6 +142,7 @@ def submit_stock_selection(
     run_dir: Path,
     provider: str,
     model: str,
+    prompt_version: str = "",
     store: StockStore | None = None,
 ) -> dict[str, Any]:
     store = store or StockStore()
@@ -164,7 +167,7 @@ def submit_stock_selection(
     claim = claim_submission(
         store=store, task="selection", mode="", as_of=as_of,
         stage=str(state.get("run_label") or ""), provider=provider, model=model,
-        decision=validated,
+        decision=validated, prompt_version=prompt_version,
     )
     if claim.state != "claimed":
         return _existing_response(claim)
@@ -209,6 +212,7 @@ def submit_candidate_promotion(
     decision: dict[str, Any],
     provider: str,
     model: str,
+    prompt_version: str = "",
     store: StockStore | None = None,
 ) -> dict[str, Any]:
     store = store or StockStore()
@@ -220,6 +224,7 @@ def submit_candidate_promotion(
         store=store, task="promotion", mode="", as_of=as_of, stage="intraday",
         provider=provider, model=model,
         decision={"as_of": as_of, "decisions": validated["decisions"]},
+        prompt_version=prompt_version,
     )
     # During cutover, the immutable source may already have been completed by
     # the old runtime before the new submission ledger existed.  Adopt that

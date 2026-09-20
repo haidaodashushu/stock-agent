@@ -12,9 +12,14 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Literal
 
+from data.agent_decision_contracts import (
+    TRADING_EVIDENCE_MAX_CODES,
+    trading_decision_contract,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = Path(os.environ.get("STOCK_DB_PATH") or ROOT / "data" / "stock_data.db")
-MAX_EVIDENCE_CODES = 50
+MAX_EVIDENCE_CODES = TRADING_EVIDENCE_MAX_CODES
 TradingMode = Literal["simulated", "live"]
 
 
@@ -57,6 +62,100 @@ def _text_list(value: Any) -> list[str]:
     return [item for item in str(value).split("|") if item]
 
 
+def _previous_decision_context(
+    conn: sqlite3.Connection, mode: TradingMode, current_as_of: str,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Return durable prior decisions without making the model reconstruct them.
+
+    The submission ledger is canonical for decisions, including hold/watch
+    rows that never create an order.  Scan a bounded history so a stock still
+    gets its latest row when it was absent from the immediately preceding
+    universe.
+    """
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(agent_decision_submissions)")
+    }
+    prompt_column = "prompt_version" if "prompt_version" in columns else "''"
+    rows = conn.execute(
+        f"""SELECT as_of, decision, {prompt_column} AS prompt_version, created_at
+             FROM agent_decision_submissions
+             WHERE task='trading' AND mode=? AND status='ready'
+               AND as_of<?
+             ORDER BY created_at DESC LIMIT 20""",
+        (mode, current_as_of),
+    ).fetchall()
+    by_code: dict[str, dict[str, Any]] = {}
+    previous_round: dict[str, Any] = {}
+    rows_key = "signals" if mode == "simulated" else "decisions"
+    for index, stored in enumerate(rows):
+        decision = _object(stored["decision"])
+        if index == 0:
+            report = _object(decision.get("report"))
+            previous_round = {
+                "as_of": stored["as_of"],
+                "prompt_version": stored["prompt_version"],
+                "focus": _list(report.get("focus")),
+                "risk": report.get("risk"),
+            }
+        for raw in _list(decision.get(rows_key)):
+            if not isinstance(raw, dict):
+                continue
+            code = str(raw.get("code") or "").zfill(6)
+            if not code or code in by_code:
+                continue
+            by_code[code] = {
+                "as_of": stored["as_of"],
+                "prompt_version": stored["prompt_version"],
+                "action": raw.get("action"),
+                "confidence": raw.get("confidence"),
+                "reason": str(raw.get("reason") or "")[:300],
+                "risk": str(raw.get("risk") or "")[:240],
+            }
+    return by_code, previous_round
+
+
+def _entry_theses(
+    conn: sqlite3.Connection, mode: TradingMode,
+) -> dict[str, dict[str, Any]]:
+    """Return entry reasons for the currently open holding cycle.
+
+    A lifetime-first buy is not the thesis for a position that was later fully
+    closed and reopened.  Replay filled volume so each new holding cycle resets
+    its original reason, matching the portfolio ledger's semantics.
+    """
+    if mode == "simulated":
+        rows = conn.execute(
+            """SELECT code,direction,volume,reason,created_at FROM orders
+                WHERE direction IN ('buy','sell') AND status='filled'
+                ORDER BY created_at,id"""
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT code,action AS direction,filled_volume AS volume,reason,
+                       COALESCE(NULLIF(filled_at,''),created_at) AS created_at
+                 FROM live_trade_intents
+                WHERE action IN ('buy','sell') AND status='filled' AND filled_volume>0
+                ORDER BY created_at,id"""
+        ).fetchall()
+    result: dict[str, dict[str, Any]] = {}
+    open_volume: dict[str, int] = {}
+    for row in rows:
+        code = str(row["code"] or "").zfill(6)
+        volume = max(0, int(row["volume"] or 0))
+        if str(row["direction"] or "").lower() == "sell":
+            open_volume[code] = max(0, open_volume.get(code, 0) - volume)
+            if open_volume[code] == 0:
+                result.pop(code, None)
+            continue
+        item = {"reason": str(row["reason"] or "")[:300], "at": row["created_at"]}
+        if open_volume.get(code, 0) == 0:
+            result[code] = {"original": item, "latest": item}
+        state = result[code]
+        state["latest"] = item
+        open_volume[code] = open_volume.get(code, 0) + volume
+    return result
+
+
 def _snapshot(
     conn: sqlite3.Connection,
     mode: TradingMode,
@@ -97,7 +196,12 @@ def _zone(technical: dict[str, Any], selector: dict[str, Any]) -> str:
     return "middle"
 
 
-def _compact_stock(item: dict[str, Any], updated_at: str) -> dict[str, Any]:
+def _compact_stock(
+    item: dict[str, Any], updated_at: str,
+    *,
+    previous_decision: dict[str, Any] | None = None,
+    entry_thesis: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     quote = _object(item.get("quote"))
     technical = _object(item.get("technical"))
     intraday = _object(item.get("intraday"))
@@ -185,6 +289,10 @@ def _compact_stock(item: dict[str, Any], updated_at: str) -> dict[str, Any]:
             "ai_selection": ai_selection or None,
             "lifecycle": lifecycle or None,
             "promotion": promotion or None,
+        },
+        "decision_context": {
+            "previous": previous_decision or None,
+            "entry_thesis": entry_thesis or None,
         },
         "quote": {
             "price": quote.get("price"),
@@ -302,6 +410,7 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
     """Return one account and only that account's decision universe."""
     with _connect() as conn:
         market, rows, as_of = _snapshot(conn, mode)
+        previous_by_code, previous_round = _previous_decision_context(conn, mode, as_of)
     market_context = _object(market.get("market"))
     indices = _object(market_context.get("indices"))
     sector_context = _object(market_context.get("sector_rotation"))
@@ -338,6 +447,9 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
             "change_pct": quote.get("change_pct"),
             "profit_pct": position.get("profit_pct"),
             "available_to_sell": position.get("available_to_sell"),
+            "previous_action": (previous_by_code.get(str(row["code"]).zfill(6)) or {}).get(
+                "action"
+            ),
         })
     def universe_priority(item: dict[str, Any]) -> tuple[int, int, float, str]:
         try:
@@ -388,6 +500,10 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
         },
         "account": market.get("account") or {},
         "account_policy": market.get("account_policy") or {},
+        "decision_contract": trading_decision_contract(
+            mode, market.get("account_policy") or {},
+        ),
+        "previous_round": previous_round or None,
         "universe": universe,
         "required_evidence_codes": [row["code"] for row in universe],
     }
@@ -404,6 +520,10 @@ def get_stock_evidence(
         raise ValueError(f"at most {MAX_EVIDENCE_CODES} codes per call")
     with _connect() as conn:
         _, rows, current_as_of = _snapshot(conn, mode, as_of)
+        previous_by_code, previous_round = _previous_decision_context(
+            conn, mode, current_as_of,
+        )
+        entry_by_code = _entry_theses(conn, mode)
     by_code = {str(row["code"]).zfill(6): row for row in rows}
     unknown = [code for code in normalized if code not in by_code]
     if unknown:
@@ -413,6 +533,8 @@ def get_stock_evidence(
             _compact_stock(
                 _object(by_code[code]["payload"]),
                 str(by_code[code]["updated_at"]),
+                previous_decision=previous_by_code.get(code),
+                entry_thesis=entry_by_code.get(code),
             ),
             mode,
         )
@@ -423,6 +545,7 @@ def get_stock_evidence(
         "mode": mode,
         "as_of": current_as_of,
         "count": len(evidence),
+        "previous_round": previous_round or None,
         "stocks": evidence,
     }
 

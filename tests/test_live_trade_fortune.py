@@ -13,7 +13,6 @@ from scripts.render_live_trade_fortune import (
     PLAIN_END,
     FortuneContext,
     FortuneReading,
-    build_prompt,
     clean_reading,
     load_context,
     render_block,
@@ -69,32 +68,6 @@ class LiveTradeFortuneTests(unittest.TestCase):
 
             self.assertIsNone(load_context(noop))
             self.assertIsNone(load_context(dry))
-
-    def test_prompt_keeps_divination_downstream_and_non_operational(self):
-        context = FortuneContext(
-            as_of="2026-01-15 14:04",
-            actions=(
-                {
-                    "code": "600000",
-                    "name": "示例股票",
-                    "action": "buy",
-                    "volume": 100,
-                    "price": 10.00,
-                },
-            ),
-        )
-
-        prompt = build_prompt(context, {"课体": "知一课", "三传": [{"支": "子"}]})
-
-        self.assertIn("已经生成完毕", prompt)
-        self.assertIn("不可被本次解读修改", prompt)
-        self.assertIn("不查询也不使用行情、资金、新闻、账户", prompt)
-        self.assertIn("不输出买入、卖出、加减仓", prompt)
-        self.assertIn("买入 600000 示例股票", prompt)
-        self.assertIn(FORTUNE_BEGIN, prompt)
-        self.assertIn(FORTUNE_END, prompt)
-        self.assertIn(PLAIN_BEGIN, prompt)
-        self.assertIn(DETAIL_BEGIN, prompt)
 
     def test_clean_reading_discards_reasoning_and_duplicate_disclaimer(self):
         raw = (

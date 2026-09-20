@@ -22,6 +22,7 @@ parser = argparse.ArgumentParser(description="Stock-selection agent MCP")
 parser.add_argument("--run-dir", required=True)
 parser.add_argument("--provider", default="codex-cli")
 parser.add_argument("--model", default="gpt-5.6-sol")
+parser.add_argument("--prompt-version", default="")
 args = parser.parse_args()
 RUN_DIR = Path(args.run_dir).resolve()
 RUN_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,7 +57,7 @@ def submit_stock_selection(as_of: str, decision: dict) -> dict:
     """Validate and atomically publish the complete final candidate decision."""
     return submit_selection(
         as_of=as_of, decision=decision, run_dir=RUN_DIR,
-        provider=args.provider, model=args.model,
+        provider=args.provider, model=args.model, prompt_version=args.prompt_version,
     )
 
 

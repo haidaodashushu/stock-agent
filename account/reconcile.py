@@ -16,11 +16,14 @@ import urllib.request
 
 from config.runtime_paths import configurable_path
 from data.store.sqlite_store import StockStore
+from data.security_universe import (
+    DEFAULT_BLOCKED_BOARD_PREFIXES as FORBIDDEN_PREFIXES,
+    is_supported_board_code,
+)
 
 logger = logging.getLogger(__name__)
 
 INITIAL_CAPITAL = 1_000_000.0
-FORBIDDEN_PREFIXES = ("688", "8", "4")
 DEFAULT_RESOLVED_ISSUES_PATH = configurable_path(
     "STOCK_RECONCILE_ISSUES_CONFIG", "config/reconcile_resolved_issues.local.json",
 )
@@ -49,8 +52,7 @@ class ReconcileResult:
 
 def is_tradeable_a_share(code: str) -> bool:
     """本系统交易白名单：排除科创板/北证。"""
-    code = str(code).zfill(6)
-    return not code.startswith(FORBIDDEN_PREFIXES)
+    return is_supported_board_code(code)
 
 
 def _order_date(created_at: str) -> str:
