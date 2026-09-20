@@ -4,6 +4,14 @@ from data.news_evidence import build_news_evidence, match_policy_evidence
 
 
 class NewsEvidenceTests(unittest.TestCase):
+    def test_company_diagnostics_and_redirect_pages_are_background(self):
+        from data.news_evidence import is_aggregate_news
+        for url in ('https://basic.10jqka.com.cn/300502/worth.html',
+                    'https://basic.10jqka.com.cn/astockpc/astockmain/index.html?code=300502'):
+            with self.subTest(url=url):
+                self.assertTrue(is_aggregate_news({'url':url,'title':'公司资料'}))
+        self.assertFalse(is_aggregate_news({'url':'https://example.com/notice/123','title':'公司：半年报公告'}))
+
     def test_reindexed_directory_is_not_a_new_policy_or_risk_event(self):
         evidence = build_news_evidence({"title":"华天科技资讯", "url":"https://basic.10jqka.com.cn/002185/news.html",
             "content":"去年曾出现减持、监管函。工信部印发人工智能政策。", "publish_at":"2026-09-20 02:48:00",

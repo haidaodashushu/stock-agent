@@ -10,6 +10,7 @@ import html
 import json
 import re
 import sqlite3
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
@@ -52,8 +53,14 @@ def is_aggregate_news(row: Mapping[str, Any]) -> bool:
     """A periodically re-indexed company directory is not a new event."""
     url = str(_value(row, "url"))
     title = str(_value(row, "title"))
-    return bool(re.search(r"basic\.10jqka\.com\.cn/\d{6}/(?:news|event)\.html", url)) or any(
-        marker in title for marker in ("资讯列表-新闻与股价联动", "公司大事-近期重要事件"))
+    parsed = urlparse(url)
+    company_directory = parsed.hostname == "basic.10jqka.com.cn" and (
+        parsed.path == "/astockpc/astockmain/index.html" or bool(re.fullmatch(
+            r"/\d{6}/(?:news|event|finance|operate|worth|bonus|concept|field|capital|equity|holder|company|position)\.html",
+            parsed.path)))
+    return company_directory or any(marker in title for marker in (
+        "资讯列表-新闻与股价联动", "公司大事-近期重要事件", "经营分析-财务诊断",
+        "财务分析-财务诊断", "分红融资-财务诊断", "概念题材-财务诊断", "盈利预测-业绩预测"))
 
 
 def parse_tags(value: Any) -> list[str]:
