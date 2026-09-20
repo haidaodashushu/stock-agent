@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 
-DEFAULT_BLOCKED_BOARD_PREFIXES = ("688", "8", "4")
+DEFAULT_BLOCKED_BOARD_PREFIXES = ("688", "8", "4", "920")
 
 
 def is_supported_board_code(

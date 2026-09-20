@@ -166,12 +166,13 @@ class CodexCliProvider:
                 "--config",
                 'mcp_servers.stock_agent.default_tools_approval_mode="approve"',
             ])
-            db_path = os.environ.get("STOCK_DB_PATH", "").strip()
-            if db_path:
-                command.extend([
-                    "--config",
-                    f"mcp_servers.stock_agent.env.STOCK_DB_PATH={json.dumps(db_path)}",
-                ])
+            for name in ("STOCK_DB_PATH", "STOCK_OPPORTUNITY_CONFIG", "STOCK_PYTHON"):
+                value = os.environ.get(name, "").strip()
+                if value:
+                    command.extend([
+                        "--config",
+                        f"mcp_servers.stock_agent.env.{name}={json.dumps(value)}",
+                    ])
         if resume_session_id:
             command.extend([resume_session_id, "-"])
         else:

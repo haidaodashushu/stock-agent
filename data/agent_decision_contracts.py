@@ -155,6 +155,19 @@ def trading_decision_contract(
         "reason": "evidence-based decision reason",
         "risk": "key risk",
     }
+    row_shape["watch_plan"] = {
+        "required_when": "overview.refresh.opportunity_trial=true",
+        "state": "watch|account_blocked|data_pending|invalid|holding",
+        "thesis": "durable original thesis, preserve unless new evidence changes it",
+        "wait_reason": "why hold/wait/act now and what would change the decision",
+        "review_above": "positive observed-structure price or null",
+        "review_below": "positive pullback/review price or null",
+        "invalidation_below": "positive original structural risk level or null",
+        "invalidation_reason": "required when invalid; distinguish portfolio reduction",
+        "review_after_minutes": "integer 15..240; use 60 when no price trigger is defensible",
+        "requalified": "true only for an explicitly revalidated retained opportunity",
+        "requalification_reason": "current route, structure, company evidence and account fit",
+    }
     decision_shape: dict[str, Any] = {
         "reviewed_codes": ["all required_evidence_codes"],
         "market_view": {"regime": "overview regime", "summary": "text"},

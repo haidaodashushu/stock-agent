@@ -101,8 +101,9 @@ fi
 END_TS="$(date +%s)"
 DURATION="$((END_TS - START_TS))"
 DB_STATS="$("$PYTHON_BIN" - <<'PY' 2>>"$LOG_FILE"
+import os
 import sqlite3
-conn = sqlite3.connect("data/stock_data.db")
+conn = sqlite3.connect(os.environ.get("STOCK_DB_PATH") or "data/stock_data.db")
 try:
     latest, rows = conn.execute(
         "SELECT COALESCE(MAX(date),'unknown'), COUNT(*) FROM daily_prices"

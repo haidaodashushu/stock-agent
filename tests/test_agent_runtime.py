@@ -65,7 +65,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn("/workspace/.venv/bin/python", joined)
         self.assertNotIn("dangerously-bypass-approvals-and-sandbox", command)
 
-    @patch.dict("os.environ", {"STOCK_DB_PATH": "/tmp/shadow.db"})
+    @patch.dict("os.environ", {"STOCK_DB_PATH": "/tmp/shadow.db", "STOCK_OPPORTUNITY_CONFIG": "/tmp/trial.json"})
     @patch("data.agent_runtime.shutil.which", return_value="/opt/codex/bin/codex")
     @patch("data.agent_runtime.Path.exists", return_value=True)
     def test_shadow_database_is_forwarded_to_mcp_process(self, *_args) -> None:
@@ -76,6 +76,7 @@ class AgentRuntimeTests(unittest.TestCase):
         self.assertIn(
             'mcp_servers.stock_agent.env.STOCK_DB_PATH="/tmp/shadow.db"', command,
         )
+        self.assertIn('mcp_servers.stock_agent.env.STOCK_OPPORTUNITY_CONFIG="/tmp/trial.json"', command)
 
     @patch("data.agent_runtime.shutil.which", return_value="/opt/codex/bin/codex")
     @patch("data.agent_runtime.Path.exists", return_value=True)

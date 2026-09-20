@@ -85,13 +85,13 @@ class FundFlowFilter:
                     score -= 1.0
 
             # 大单净流入（DDE）
-            if f.big_net_inflow > 0:
+            if (f.big_net_inflow or 0) > 0:
                 score += 0.5
-            elif f.big_net_inflow < 0:
+            elif (f.big_net_inflow or 0) < 0:
                 score -= 0.3
 
             # 主力占比
-            if f.main_net_pct > 5:
+            if (f.main_net_pct or 0) > 5:
                 score += 0.5
 
             boost[f.code] = round(score, 2)
@@ -124,17 +124,17 @@ class FundFlowFilter:
             parts.append(f"主力净出{self._fmt(abs(flow.main_net_inflow))}")
 
         # 大单
-        if flow.big_net_inflow != 0:
-            direction = "入" if flow.big_net_inflow > 0 else "出"
+        if (flow.big_net_inflow or 0) != 0:
+            direction = "入" if (flow.big_net_inflow or 0) > 0 else "出"
             parts.append(f"大单净{direction}{self._fmt(abs(flow.big_net_inflow))}")
 
         # 小单
-        if flow.retail_net_inflow != 0:
-            direction = "入" if flow.retail_net_inflow > 0 else "出"
+        if (flow.retail_net_inflow or 0) != 0:
+            direction = "入" if (flow.retail_net_inflow or 0) > 0 else "出"
             parts.append(f"小单净{direction}{self._fmt(abs(flow.retail_net_inflow))}")
 
         # 占比
-        if flow.main_net_pct > 0:
+        if (flow.main_net_pct or 0) > 0:
             parts.append(f"占比{flow.main_net_pct:.1f}%")
 
         return " | ".join(parts)
@@ -182,10 +182,10 @@ class FundFlowFilter:
             parts.append(f"主力净入{_fmt(flow.main_net_inflow)}")
         elif flow.main_net_inflow < 0:
             parts.append(f"主力净出{_fmt(abs(flow.main_net_inflow))}")
-        if flow.big_net_inflow != 0:
-            d = "入" if flow.big_net_inflow > 0 else "出"
+        if (flow.big_net_inflow or 0) != 0:
+            d = "入" if (flow.big_net_inflow or 0) > 0 else "出"
             parts.append(f"大单净{d}{_fmt(abs(flow.big_net_inflow))}")
-        if flow.main_net_pct > 0:
+        if (flow.main_net_pct or 0) > 0:
             parts.append(f"占比{flow.main_net_pct:.1f}%")
         return " | ".join(parts) if parts else "持平"
 

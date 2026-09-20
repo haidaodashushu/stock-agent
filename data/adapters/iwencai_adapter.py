@@ -231,32 +231,39 @@ class IwenCaiAdapter(DataSourceAdapter):
         if not code:
             return None
 
-        # 主力资金净流入（L1）
-        main_net = self._safe_float(item, "主力资金流向")
-
-        # DDE 大单净额
-        big_net = self._safe_float(item, "dde大单净额", "DDE大单净额", "大单净买入额", "大单净额")
-
-        # 小单净买入额
-        retail_net = self._safe_float(item, "小单净买入额")
-
-        # 资金流入/流出（用于计算流向占比）
-        inflow = self._safe_float(item, "资金流入")
-        outflow = self._safe_float(item, "资金流出")
-
-        # 估算主力净占比
-        total = inflow + outflow
-        main_pct = (abs(main_net) / total * 100) if total > 0 and main_net != 0 else 0.0
-
+        import math
+        import re
+        requested = str(date).replace("-", "")
+        def number(*keys):
+            for key in keys:
+                matches = [(k,v) for k,v in item.items() if k == key or k.startswith(key+"[")]
+                for name,value in matches:
+                    dates = re.findall(r"\[(\d{8})\]", name)
+                    if dates and dates[-1] != requested:
+                        continue
+                    # Undated current queries cannot be relabeled as history.
+                    if not dates and requested != datetime.now().strftime("%Y%m%d"):
+                        continue
+                    try:
+                        result = float(value)
+                        if math.isfinite(result):
+                            return result
+                    except (ValueError,TypeError):
+                        pass
+            return None
+        main_net = number("主力资金流向")
+        if main_net is None:
+            return None
+        big_net = number("dde大单净额", "DDE大单净额", "大单净买入额", "大单净额")
+        retail_net = number("小单净买入额", "小单净流入")
+        inflow, outflow = number("资金流入"), number("资金流出")
+        total = inflow+outflow if inflow is not None and outflow is not None else None
         return FundFlow(
-            code=self._normalize_code(str(code)),  # 600519.SH → 600519
-            date=date,
-            main_net_inflow=main_net,
-            big_net_inflow=big_net,
+            code=self._normalize_code(str(code)), date=requested,
+            main_net_inflow=main_net, big_net_inflow=big_net,
             retail_net_inflow=retail_net,
-            main_net_pct=round(main_pct, 2),
-            source=self.name,
-            reliability="optional",
+            main_net_pct=round(main_net/total*100,2) if total and total>0 else None,
+            source=self.name, reliability="optional",
         )
 
     @staticmethod

@@ -1,0 +1,13 @@
+{
+  "enabled": false,
+  "event_decisions": true,
+  "candidate_batch_size": 3,
+  "observation_sessions": 5,
+  "quote_max_age_seconds": 240,
+  "quote_cache_seconds": 45,
+  "minute_cache_seconds": 600,
+  "max_event_runs_per_mode_per_day": 8,
+  "event_cooldown_minutes": 20,
+  "event_max_age_minutes": 15,
+  "event_batch_size": 3
+}

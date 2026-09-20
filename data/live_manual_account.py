@@ -79,7 +79,10 @@ def capital_flow_summary(cfg: dict | None = None) -> dict:
 def blocked_prefixes(cfg: dict | None = None) -> Tuple[str, ...]:
     cfg = cfg or load_config()
     raw = cfg["blocked_boards"] if "blocked_boards" in cfg else ["300", "301", "688", "8", "4"]
-    return tuple(str(item).strip() for item in raw if str(item).strip())
+    prefixes = [str(item).strip() for item in raw if str(item).strip()]
+    if "8" in prefixes or "4" in prefixes:
+        prefixes.append("920")
+    return tuple(dict.fromkeys(prefixes))
 
 
 def is_live_buy_allowed(code: str, cfg: dict | None = None) -> bool:

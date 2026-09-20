@@ -211,10 +211,42 @@ def _validate_new_entry_gate(
     route = str(selection.get("entry_route") or "")
     if route not in ENTRY_ROUTES:
         raise ValueError(f"{row['code']}: entry route {route or '<empty>'} is not enabled")
+    opportunity = selection.get("opportunity") or {}
+    if opportunity.get("requires_requalification"):
+        plan = row.get("watch_plan") or {}
+        if plan.get("requalified") is True and plan.get("requalification_reason"):
+            return
+        raise ValueError(f"{row['code']}: retained observation requires explicit current requalification")
     if selection.get("setup_stage") != "actionable" or selection.get("buy_eligible") is not True:
         raise ValueError(
             f"{row['code']}: candidate lifecycle is not actionable/buy_eligible"
         )
+
+
+def _validate_trial_rows(rows: list[dict], context: dict) -> None:
+    if not context.get("opportunity_trial"):
+        return
+    from datetime import datetime, timedelta
+    from data.opportunity_trial import validate_plan
+    from data.trading_data_quality import valid_quote
+    from data.market_calendar import market_day
+    now = datetime.fromisoformat(context["as_of"])
+    previous = now.date() - timedelta(days=1)
+    while not market_day(previous).is_open:
+        previous -= timedelta(days=1)
+    facts = {r["code"]:r for r in context["positions"]+context["candidates"]}
+    for row in rows:
+        row["watch_plan"] = validate_plan(row.get("watch_plan"))
+        if row["action"] not in {"buy", "add"}:
+            continue
+        evidence = facts[row["code"]]
+        if not valid_quote(evidence.get("quote", {}), now):
+            raise ValueError(f"{row['code']}: fresh source-timestamped quote required")
+        daily = evidence.get("technical", {})
+        if daily.get("date") != str(previous) or daily.get("quality") != "verified_qfq":
+            raise ValueError(f"{row['code']}: previous-session verified adjusted daily bars required")
+        if row["watch_plan"]["state"] in {"invalid", "data_pending", "account_blocked"}:
+            raise ValueError(f"{row['code']}: buy conflicts with watch_plan state")
 
 
 def _portfolio_review(payload: dict[str, Any]) -> dict[str, Any]:
@@ -251,6 +283,7 @@ def validate_simulated_decision(
     }
     signals = _normalize_rows(_root_items(payload, "signals"), allowed_codes, SIM_ACTIONS)
     _require_complete_decision_rows(signals, context, "signals")
+    _validate_trial_rows(signals, context)
     position_by_code = {
         str(row.get("code") or "").zfill(6): row
         for row in positions
@@ -373,6 +406,7 @@ def validate_live_decision(
     }
     decisions = _normalize_rows(_root_items(payload, "decisions"), allowed_codes, LIVE_ACTIONS)
     _require_complete_decision_rows(decisions, context, "decisions")
+    _validate_trial_rows(decisions, context)
     position_codes = {
         str(row.get("code") or "").zfill(6)
         for row in positions

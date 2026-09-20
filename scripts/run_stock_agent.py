@@ -158,7 +158,7 @@ def main() -> int:
     prompt_version = hashlib.sha256(prompt.encode("utf-8")).hexdigest()
     # Keep the virtualenv launcher path intact; resolving the symlink would
     # silently switch the MCP process back to the system interpreter.
-    python = str(ROOT / ".venv" / "bin" / "python")
+    python = os.environ.get("STOCK_PYTHON") or str(ROOT / ".venv" / "bin" / "python")
     common = [
         "--run-dir", str(run_dir), "--provider", args.provider,
         "--model", args.model, "--prompt-version", prompt_version,

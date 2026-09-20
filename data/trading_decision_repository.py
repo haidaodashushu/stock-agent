@@ -215,7 +215,7 @@ def _compact_stock(
     lifecycle = _object(extra.get("candidate_lifecycle"))
     promotion = _object(extra.get("candidate_promotion"))
     logic_change = _object(extra.get("logic_change"))
-    fundamental = _object(extra.get("fundamental_llm"))
+    fundamental = _object(item.get("fundamental")) or _object(extra.get("financial_factor")) or _object(extra.get("fundamental_llm"))
     ai_selection = _object(extra.get("ai_selection"))
     zone = _zone(technical, selector)
     entry_route = str(selector.get("entry_route") or "unclassified")
@@ -228,6 +228,8 @@ def _compact_stock(
             "analysis_basis": row.get("analysis_basis"),
             "content_digest": row.get("content_digest"),
             "source": row.get("source"),
+            "url": row.get("url"),
+            "source_tier": row.get("source_tier"),
             "published_at": row.get("published_at") or row.get("publish_at"),
             "sentiment": row.get("sentiment"),
             "score": row.get("score"),
@@ -266,6 +268,7 @@ def _compact_stock(
         "sim_position": _object(item.get("position")) or None,
         "live_position": _object(item.get("live_position")) or None,
         "selection": {
+            "opportunity": _object(extra.get("opportunity")),
             "date": screen.get("run_date"),
             "score": screen.get("score"),
             "signal": screen.get("signal_type"),
@@ -290,11 +293,14 @@ def _compact_stock(
             "lifecycle": lifecycle or None,
             "promotion": promotion or None,
         },
+        "opportunity": _object(item.get("opportunity")),
         "decision_context": {
             "previous": previous_decision or None,
             "entry_thesis": entry_thesis or None,
         },
         "quote": {
+            "source_time": quote.get("source_time"),
+            "fetched_at": quote.get("fetched_at"),
             "price": quote.get("price"),
             "change_pct": quote.get("change_pct"),
             "open": quote.get("open"),
@@ -307,6 +313,8 @@ def _compact_stock(
         },
         "technical": {
             "date": technical.get("daily_date"),
+            "quality": technical.get("quality"),
+            "error": technical.get("error"),
             "trend": technical.get("trend"),
             "ma5": technical.get("ma5"),
             "ma10": technical.get("ma10"),
@@ -326,6 +334,10 @@ def _compact_stock(
             "rs_60d_percentile": technical.get("rs_60d_percentile"),
         },
         "intraday": {
+            "source_trade_date": intraday.get("source_trade_date"),
+            "source_time": intraday.get("source_time"),
+            "has_gaps": intraday.get("has_gaps"),
+            "vwap_error": intraday.get("vwap_error"),
             "last_time": intraday.get("last_time"),
             "last_5m_pct": intraday.get("last_5m_pct"),
             "last_15m_pct": intraday.get("last_15m_pct"),
@@ -618,5 +630,6 @@ def build_execution_context(
         "market_regime": market_regime if isinstance(market_regime, dict) else {},
         "positions": positions,
         "candidates": candidates,
+        "opportunity_trial": bool(_object(market.get("refresh")).get("opportunity_trial")),
         "required_evidence_codes": [row["code"] for row in [*positions, *candidates]],
     }

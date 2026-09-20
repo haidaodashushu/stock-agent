@@ -34,6 +34,10 @@ case "$MODE:$STAGE" in
   *) exit 0 ;;
 esac
 
+if "$PYTHON" -c 'from data.opportunity_trial import enabled; raise SystemExit(0 if enabled() else 1)'; then
+  exec "$PYTHON" scripts/run_opportunity_trading.py --mode "$MODE"
+fi
+
 set +e
 refresh_output="$("$PYTHON" scripts/refresh_trading_cycle.py --stage "$STAGE" --mode "$MODE")"
 refresh_rc=$?

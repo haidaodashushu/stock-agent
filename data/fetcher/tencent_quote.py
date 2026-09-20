@@ -23,6 +23,8 @@ _SYMBOL_TENCENT = {
 def _tencent_symbol(symbol: str) -> str:
     """转换为腾讯格式: sh600000, sz000001"""
     s = str(symbol).zfill(6)
+    if s.startswith("920"):
+        return f"bj{s}"
     prefix = {"5": "sh", "6": "sh", "0": "sz", "1": "sz", "3": "sz", "8": "bj", "4": "bj"}
     return f"{prefix.get(s[0], 'sz')}{s}"
 

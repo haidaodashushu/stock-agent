@@ -2,7 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON="$ROOT/.venv/bin/python"
+# Optional host wiring for an isolated trial worktree; contains paths only.
+if [[ -f "$ROOT/config/trial_runtime.local.env" ]]; then
+  source "$ROOT/config/trial_runtime.local.env"
+fi
+PYTHON="${STOCK_PYTHON:-$ROOT/.venv/bin/python}"
 JOB="${1:-}"
 
 # Market data and messaging must go direct to avoid consuming limited proxy
@@ -13,6 +17,15 @@ unset http_proxy https_proxy all_proxy no_proxy
 cd "$ROOT"
 
 case "$JOB" in
+  opportunity-monitor)
+    exec "$PYTHON" scripts/run_opportunity_monitor.py
+    ;;
+  opportunity-simulated)
+    exec "$PYTHON" scripts/run_opportunity_trading.py --mode simulated --event
+    ;;
+  opportunity-live)
+    exec "$PYTHON" scripts/run_opportunity_trading.py --mode live --event
+    ;;
   premarket-selection)
     exec scripts/stock_agent_selection_cycle.sh
     ;;

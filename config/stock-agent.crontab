@@ -12,4 +12,7 @@ CRON_TZ=Asia/Shanghai
 20 8,12,15,21 * * * {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh policy-radar >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
 0 22 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh nightly-update >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
 45 22 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh night-selection >> {{STOCK_ROOT}}/logs/agent_scheduler.log 2>&1
+*/3 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh opportunity-monitor >> {{STOCK_ROOT}}/logs/opportunity_monitor.log 2>&1
+* 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh opportunity-simulated >> {{STOCK_ROOT}}/logs/opportunity_trading.log 2>&1
+* 9-11,13-14 * * 1-5 {{STOCK_ROOT}}/scripts/stock_scheduled_job.sh opportunity-live >> {{STOCK_ROOT}}/logs/opportunity_trading.log 2>&1
 # END STOCK_AGENT_RUNTIME

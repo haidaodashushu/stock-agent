@@ -46,6 +46,7 @@ dist/
 .env.*
 config/runtime.local.json
 config/*.local.json
+config/*.local.env
 *secret*
 *secrets*
 *token*

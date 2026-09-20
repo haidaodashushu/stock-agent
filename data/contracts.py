@@ -131,9 +131,9 @@ class FundFlow:
     code: str
     date: str
     main_net_inflow: float = 0.0
-    big_net_inflow: float = 0.0
-    retail_net_inflow: float = 0.0
-    main_net_pct: float = 0.0
+    big_net_inflow: float | None = None
+    retail_net_inflow: float | None = None
+    main_net_pct: float | None = None
     source: str = ""
     reliability: str = "optional"
 

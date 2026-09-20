@@ -119,6 +119,9 @@ def submit_trading_decision(
             if fortune.returncode == 0 and fortune_path.exists():
                 report = report.rstrip() + "\n" + fortune_path.read_text(encoding="utf-8").strip()
         complete_submission(store=store, key=claim.submission_key, result=result, report=report)
+        if context.get("opportunity_trial") and not dry_run:
+            from data.opportunity_trial import record_decision
+            record_decision(store,mode,validated,context,result)
         enqueue_message(
             store=store, submission_key=claim.submission_key,
             message_type="text", content=report,

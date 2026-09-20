@@ -12,7 +12,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 log = logging.getLogger(__name__)
 
-DAYS = 5       # 只更新最近5天
+DAYS = 320     # 重建完整前复权窗口
 WORKERS = 16   # 并发线程
 
 
@@ -50,54 +50,20 @@ def get_all_codes():
 
 
 def fetch_recent(code, days=DAYS):
-    """获取单只股票最近N天日K"""
-    prefix = market_prefix(code)
-    url = f"https://ifzq.gtimg.cn/appstock/app/kline/kline?param={prefix}{code},day,,,{days+10}"
+    """获取单只股票完整前复权窗口，至少请求320根。"""
+    from data.adjusted_daily import fetch_window
     try:
-        req = urllib.request.Request(url, headers={
-            'User-Agent': 'Mozilla/5.0', 'Accept': '*/*',
-            'Referer': 'https://gu.qq.com/',
-        })
-        resp = urllib.request.urlopen(req, timeout=15)
-        data = json.loads(resp.read().decode('utf-8', errors='ignore'))
-        klines = data.get('data', {}).get(f'{prefix}{code}', {}).get('day',
-                  data.get('data', {}).get(f'{prefix}{code}', {}).get('qfqday', []))
-        if not klines:
-            return code, []
-
-        # 只取最近 days 天的
-        cutoff = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
-        rows = []
-        for item in klines:
-            if len(item) < 5:
-                continue
-            ds = str(item[0])
-            # 腾讯返回两种日期格式：20260616 或 2026-06-16
-            if len(ds) == 8:
-                date_str = f"{ds[:4]}-{ds[4:6]}-{ds[6:8]}"
-            elif len(ds) == 10:
-                date_str = ds
-            else:
-                continue
-            if date_str >= cutoff:
-                rows.append((code, date_str,
-                             float(item[1]), float(item[2]),
-                             float(item[3]), float(item[4]),
-                             int(float(item[5])),
-                             float(item[6]) if len(item) > 6 else 0))
-        return code, rows
-    except Exception as e:
+        return code, fetch_window(code, count=max(320, days))
+    except Exception as exc:
+        log.warning("%s", exc)
         return code, []
 
 
 def save_updates(rows_list, conn):
-    """批量写入日K更新"""
-    ins = "INSERT OR REPLACE INTO daily_prices (code,date,open,close,high,low,volume,amount,adjust_flag) VALUES (?,?,?,?,?,?,?,?,'qfq')"
+    """Restate the adjusted window instead of mixing new raw bars into qfq."""
+    from data.adjusted_daily import save_window
     for code, rows in rows_list:
-        if not rows:
-            continue
-        for r in rows:
-            conn.execute(ins, r)
+        save_window(conn, code, rows)
 
 
 def run(days: int = DAYS, workers: int = WORKERS):
@@ -106,7 +72,7 @@ def run(days: int = DAYS, workers: int = WORKERS):
         log.error("数据库无股票数据")
         return
 
-    log.info(f"🌙 日K更新启动: {len(codes)} 只股票, 每只最近{days}天")
+    log.info(f"🌙 日K更新启动: {len(codes)} 只股票, 每只请求{max(320, days)}根前复权日K")
 
     store = StockStore()
     conn = store._get_conn()
@@ -124,7 +90,8 @@ def run(days: int = DAYS, workers: int = WORKERS):
             code, rows = f.result()
             done += 1
             batch.append((code, rows))
-            if rows:
+            from data.adjusted_daily import expected_session
+            if rows and rows[-1][1] == expected_session():
                 success += 1
             else:
                 fail += 1

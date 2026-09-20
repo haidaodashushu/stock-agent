@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,7 +55,8 @@ def _round(value: Any, digits: int = 2) -> float:
 
 
 def _symbols(codes: list[str]) -> list[str]:
-    return [("sh" if str(code).zfill(6).startswith(("5", "6")) else "sz") + str(code).zfill(6) for code in codes]
+    from data.fetcher.tencent_quote import _tencent_symbol
+    return [_tencent_symbol(code) for code in codes]
 
 
 def fetch_quotes(codes: list[str], timeout: int = 10) -> dict[str, dict[str, Any]]:
@@ -95,6 +97,8 @@ def fetch_quotes(codes: list[str], timeout: int = 10) -> dict[str, dict[str, Any
                 "amount": _round(_float(fields[37]) * 10_000),
                 "change_pct": round((price - previous) / previous * 100, 2) if price and previous else 0.0,
                 "source": "tencent",
+                "source_time": fields[30].strip(),
+                "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
     return result
 
@@ -129,6 +133,14 @@ def fetch_market_indices(timeout: int = 10) -> dict[str, dict[str, Any]]:
 def technical_state(code: str, store: StockStore) -> dict[str, Any]:
     """Compute daily technical facts strictly from persisted daily bars."""
     frame = store.get_daily_prices(code)
+    quality = "unverified_adjustment"
+    with store._get_conn() as conn:
+        table = conn.execute("SELECT 1 FROM sqlite_master WHERE name='adjusted_daily_windows'").fetchone()
+        window = conn.execute("SELECT * FROM adjusted_daily_windows WHERE code=?", (code,)).fetchone() if table else None
+    if window and frame is not None and not frame.empty:
+        frame = frame[(frame["date"] >= window["start_date"]) & (frame["date"] <= window["end_date"])]
+        if len(frame) >= 20:
+            quality = "verified_qfq"
     if frame is None or frame.empty:
         return {"error": "daily_prices missing"}
     close = frame["close"].astype(float)
@@ -166,6 +178,7 @@ def technical_state(code: str, store: StockStore) -> dict[str, Any]:
         return round((latest / base - 1) * 100, 2) if base else None
 
     return {
+        "quality": quality,
         "daily_date": str(frame.iloc[-1].get("date", ""))[:10],
         "trend": trend,
         "ma5": _round(averages[5]),
@@ -201,68 +214,8 @@ def minute_state(code: str, fetcher: TencentQuoteFetcher) -> dict[str, Any]:
             "points": 0,
             "half_hour": {"available": False, "lookback": "30_trading_minutes"},
         }
-    prices = frame["price"].astype(float)
-
-    def incremental(series: pd.Series | None) -> pd.Series | None:
-        if series is None or len(series) < 2:
-            return series
-        differences = series.diff()
-        if int((differences.iloc[1:] >= 0).sum()) >= max(1, int((len(series) - 1) * 0.95)):
-            return differences.fillna(series.iloc[0]).clip(lower=0)
-        return series
-
-    volume = incremental(frame["volume"].astype(float) if "volume" in frame else None)
-    amount = incremental(frame["amount"].astype(float) if "amount" in frame else None)
-    last, high, low = float(prices.iloc[-1]), float(prices.max()), float(prices.min())
-    vwap = 0.0
-    if volume is not None and amount is not None and float(volume.sum()) > 0:
-        vwap = float(amount.sum() / (volume.sum() * 100))
-
-    def window_pct(length: int) -> float:
-        if len(prices) <= length:
-            return 0.0
-        base = float(prices.iloc[-length])
-        return round((last - base) / base * 100, 2) if base else 0.0
-
-    half_hour: dict[str, Any] = {"available": False, "lookback": "30_trading_minutes"}
-    if len(prices) > 60:
-        base = float(prices.iloc[-31])
-        recent_volume = float(volume.iloc[-30:].sum()) if volume is not None else 0.0
-        previous_volume = float(volume.iloc[-60:-30].sum()) if volume is not None else 0.0
-        recent_amount = float(amount.iloc[-30:].sum()) if amount is not None else 0.0
-        previous_amount = float(amount.iloc[-60:-30].sum()) if amount is not None else 0.0
-        price_change = round((last - base) / base * 100, 2) if base else 0.0
-        volume_ratio = round(recent_volume / previous_volume, 2) if previous_volume else 0.0
-        amount_ratio = round(recent_amount / previous_amount, 2) if previous_amount else 0.0
-        activity = max(volume_ratio, amount_ratio)
-        if price_change >= 1.0 and activity >= 1.5:
-            signal = "volume_price_up"
-        elif price_change <= -1.0 and activity >= 1.5:
-            signal = "volume_price_down"
-        elif abs(price_change) <= 0.3 and activity >= 1.5:
-            signal = "volume_stall"
-        else:
-            signal = "neutral"
-        half_hour = {
-            "available": True,
-            "lookback": "30_trading_minutes",
-            "price_change_pct": price_change,
-            "volume_last30_vs_prev30": volume_ratio,
-            "amount_last30_vs_prev30": amount_ratio,
-            "above_vwap_now": bool(last >= vwap) if vwap else None,
-            "volume_price_signal": signal,
-        }
-    return {
-        "source": "tencent_ifzq",
-        "points": int(len(frame)),
-        "last_time": str(frame.iloc[-1].get("time", "")),
-        "last_5m_pct": window_pct(5),
-        "last_15m_pct": window_pct(15),
-        "pullback_from_high_pct": round((last - high) / high * 100, 2) if high else 0.0,
-        "vwap": _round(vwap),
-        "above_vwap": bool(last >= vwap) if vwap else None,
-        "half_hour": half_hour,
-    }
+    from data.trading_data_quality import summarize_minutes
+    return summarize_minutes(frame)
 
 
 def _minute_states(codes: list[str]) -> dict[str, dict[str, Any]]:
@@ -872,26 +825,55 @@ def refresh_trading_state(
             row for row in candidates
             if is_live_buy_allowed(str(row.get("code") or ""), live_cfg)
         ]
-    candidate_by_code = {row["code"]: row for row in candidates}
+    from data import opportunity_trial as trial
+    from data.security_universe import is_supported_board_code
+    candidates = [r for r in candidates if is_supported_board_code(r["code"])]
     holding_by_code = sim_by_code if mode == "simulated" else live_by_code
+    trial_on = trial.enabled()
+    setups, plans, monitored_count = {}, {}, len(candidates)
+    focus_raw = os.environ.get("STOCK_OPPORTUNITY_FOCUS", "").strip()
+    focus = set(focus_raw.split(",")) if focus_raw else None
+    event_evidence = trial.processing_evidence(store, mode) if trial_on and focus else {}
+    if trial_on:
+        candidates, setups, plans, monitored_count = trial.candidate_scope(
+            store, mode, candidates, list(holding_by_code), focus, now)
+        if live_cfg is not None:
+            candidates = [r for r in candidates if is_live_buy_allowed(r["code"], live_cfg)]
+    candidate_by_code = {row["code"]: row for row in candidates}
     codes = list(dict.fromkeys(list(holding_by_code) + list(candidate_by_code)))
-    quotes = fetch_quotes(codes)
+    daily_refresh = {}
+    if trial_on:
+        from data.adjusted_daily import ensure_windows
+        daily_refresh = ensure_windows(store,codes,now)
+    quotes = {}
+    if trial_on:
+        from data.trading_data_quality import valid_quote
+        quotes = {c:q for c,q in trial.read_cache(store,"quote",codes,45,now).items() if valid_quote(q,now)}
+    quotes.update(fetch_quotes([c for c in codes if c not in quotes]))
+    if trial_on:
+        trial.write_cache(store,"quote",quotes)
     if codes and not any(_float((quotes.get(code) or {}).get("price")) > 0 for code in codes):
         raise RuntimeError("Tencent realtime refresh failed for the entire decision universe")
     # Holdings and candidates form one bounded decision universe.  Every code
     # needs the same intraday evidence; limiting this list made later-ranked
     # candidates impossible to assess on VWAP and half-hour volume/price.
     minute_codes = _minute_scope(codes, minute_limit)
+    cached_minutes = trial.read_cache(store,"minute",codes,trial.settings()["minute_cache_seconds"],now) if trial_on else {}
+    # Event-affected stocks always get new minute evidence. Other holdings may
+    # reuse explicitly timestamped minutes; all quotes remain fresh.
+    minute_codes = [c for c in minute_codes if c not in cached_minutes or (focus and c in focus)]
+    cached_flows = trial.read_cache(store,"flow",codes,600,now) if trial_on else {}
+    flow_codes = [c for c in codes if c not in cached_flows]
     with ThreadPoolExecutor(max_workers=5) as pool:
         minute_future = pool.submit(_minute_states, minute_codes)
         flow_future = pool.submit(
-            _fund_flows, codes, store, retry_missing=True,
+            _fund_flows, flow_codes, store, retry_missing=True,
         )
         index_future = pool.submit(fetch_market_indices)
         sector_future = pool.submit(_sector_state)
         membership_future = pool.submit(_ensure_sector_memberships, codes, store)
-        minutes = minute_future.result()
-        flows = flow_future.result()
+        minutes = {**cached_minutes, **minute_future.result()}
+        flows = {**cached_flows, **flow_future.result()}
         indices = index_future.result()
         sectors = sector_future.result()
         membership_refresh = membership_future.result()
@@ -912,7 +894,20 @@ def refresh_trading_state(
             }
             for code in codes
         }
+    if trial_on:
+        trial.write_cache(store,"minute",{c:minutes[c] for c in minute_codes if c in minutes})
+        trial.write_cache(store,"flow",{c:flows[c] for c in flow_codes if c in flows})
+        for c in cached_flows:
+            flows[c] = {**flows[c], "status":"cached", "freshness":"cached", "cache_age_seconds":(datetime.now()-datetime.fromisoformat(flows[c]["observed_at"])).total_seconds()}
+    as_of = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     news, policy_context = _news(store, codes, as_of)
+    with store._get_conn() as conn:
+        fundamentals = {}
+        for code in codes:
+            row = conn.execute("SELECT * FROM financial_factors WHERE code=? AND updated_at<=? ORDER BY period DESC LIMIT 1", (code,as_of)).fetchone()
+            if row:
+                fundamentals[code] = dict(row)
+
     if trader:
         trader.portfolio.update_prices({
             code: _float((quotes.get(code) or {}).get("price")) for code in sim_by_code
@@ -970,7 +965,7 @@ def refresh_trading_state(
         }
 
     def item(code: str) -> dict[str, Any]:
-        candidate = candidate_by_code.get(code) or {}
+        candidate = candidate_by_code.get(code) or setups.get(code, {}).get("source") or {}
         position = sim_by_code.get(code) if mode == "simulated" else None
         live_position = live_by_code.get(code) if mode == "live" else None
         quote = quotes.get(code) or {"code": code, "error": "quote missing"}
@@ -994,6 +989,13 @@ def refresh_trading_state(
             "live_position": live_position,
             "quote": quote,
             "technical": technical_state(code, store),
+            "fundamental": fundamentals.get(code),
+            "opportunity": {
+                **{k:v for k,v in setups.get(code, {}).items() if k != "source"},
+                "previous_plan": plans.get(code),
+                "decision_trigger": "event" if focus else "scheduled_review",
+                "events": event_evidence.get(code, []),
+            } if trial_on else {},
             "intraday": minutes.get(code, {"half_hour": {"available": False}, "error": "minute limit"}),
             "fund_flow": flows.get(code, {"summary": "", "error": "fund flow missing"}),
             "sector": sector_contexts.get(code, {
@@ -1019,6 +1021,10 @@ def refresh_trading_state(
             len(sim_by_code),
             _industry_exposure(items, _float(account.get("total_equity")), mode),
         ))
+    completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    as_of = completed_at
+    for stock in items:
+        stock["updated_at"] = as_of
     snapshot = {
         "stage": stage,
         "as_of": as_of,
@@ -1039,6 +1045,12 @@ def refresh_trading_state(
         "tracked": [],
         "refresh": {
             "mode": mode,
+            "daily_refresh": daily_refresh,
+            "opportunity_trial": trial_on,
+            "focus_codes": sorted(focus or []),
+            "monitored_candidates": monitored_count,
+            "collection_started_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "collection_completed_at": completed_at,
             "scope_count": len(codes),
             "candidate_count": len(candidate_by_code),
             "candidate_board": board_status,

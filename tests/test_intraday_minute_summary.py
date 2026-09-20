@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timedelta
 from collections import Counter
 from unittest.mock import patch
 
@@ -27,13 +28,16 @@ class IntradayMinuteSummaryTest(unittest.TestCase):
             cumulative_amount += price * volume * 100
             rows.append(
                 {
-                    "time": f"{930 + i:04d}",
+                    "time": (datetime(2026,9,18,9,30)+timedelta(minutes=i)).strftime("%H%M"),
                     "price": price,
                     "volume": cumulative_volume,
                     "amount": cumulative_amount,
                 }
             )
-        summary = minute_state("000001", FakeMinuteFetcher(pd.DataFrame(rows)))
+        from data.trading_data_quality import summarize_minutes
+        frame = pd.DataFrame(rows)
+        frame.attrs["trading_date"] = "20260918"
+        summary = summarize_minutes(frame,datetime(2026,9,18,10,30))
 
         half_hour = summary["half_hour"]
         self.assertTrue(half_hour["available"])
