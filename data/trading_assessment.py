@@ -72,8 +72,10 @@ def validate(row, stock, context):
         if not any(path.startswith(prefix) for prefix in FAMILY_PATHS[family]):
             raise ValueError("confirmation source_path does not belong to this evidence family")
         resolve_path(stock,path)
-        if direction == "support" and path.startswith("fund_flow.") and (stock.get("fund_flow") or {}).get("status") != "available":
-            raise ValueError("cached or missing fund flow is background, not current independent confirmation")
+        if direction == "support" and path.startswith("fund_flow."):
+            flow = stock.get("fund_flow") or {}
+            if flow.get("status") != "available" or flow.get("source_date_verified") is not True:
+                raise ValueError("cached, undated or missing fund flow is background, not current independent confirmation")
         if path in paths:
             raise ValueError("one source_path cannot count as two independent confirmations")
         paths.add(path)

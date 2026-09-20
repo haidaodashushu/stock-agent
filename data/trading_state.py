@@ -397,7 +397,8 @@ def _fund_flows(
             error = summary or "iwencai: 问财未返回该标的资金流"
         result[code] = {
             "status": "available" if flow else "unavailable",
-            "freshness": "live" if flow else "unavailable",
+            "freshness": ("reported_date" if flow.date else "source_date_unknown") if flow else "unavailable",
+            "source_date_verified": bool(flow and flow.date == now.strftime("%Y%m%d")),
             "summary": summary if flow else "",
             "detail": flow.to_dict() if flow else None,
             "source": "iwencai",
@@ -469,10 +470,11 @@ def _news(
                           score,risk_level,tags,created_at
                    FROM news_events WHERE code=? AND created_at<=?
                      AND COALESCE(NULLIF(publish_at,''),created_at) BETWEEN ? AND ?
-                   ORDER BY publish_at DESC, id DESC LIMIT 2""",
+                   ORDER BY publish_at DESC, id DESC LIMIT 20""",
                 (code, as_of, since, as_of),
             ).fetchall()
-            result[code] = [build_news_evidence(row) for row in rows]
+            from data.news_evidence import is_aggregate_news
+            result[code] = [build_news_evidence(row) for row in rows if not is_aggregate_news(row)][:2]
         policy_context = recent_policy_evidence(conn, as_of)
     finally:
         conn.close()
@@ -902,13 +904,18 @@ def refresh_trading_state(
         for c in cached_flows:
             flows[c] = {**flows[c], "status":"cached", "freshness":"cached", "cache_age_seconds":(datetime.now()-datetime.fromisoformat(flows[c]["observed_at"])).total_seconds()}
     as_of = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    financial_refresh = {}
+    from data.research_financials import latest_financial, refresh_financials
+    if trial_on and trial.settings().get("financial_enrichment", False):
+        financial_refresh = refresh_financials(store,codes,limit=3)
+        as_of = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     news, policy_context = _news(store, codes, as_of)
     from data.stock_research import contexts as research_contexts, daily_technical
     research = research_contexts(store,codes,setups,datetime.fromisoformat(as_of)) if trial_on else {}
     with store._get_conn() as conn:
         fundamentals = {}
         for code in codes:
-            row = conn.execute("SELECT * FROM financial_factors WHERE code=? AND updated_at<=? ORDER BY period DESC LIMIT 1", (code,as_of)).fetchone()
+            row = latest_financial(conn,code,as_of)
             if row:
                 fundamentals[code] = dict(row)
 
@@ -1054,6 +1061,7 @@ def refresh_trading_state(
         "refresh": {
             "mode": mode,
             "daily_refresh": daily_refresh,
+            "financial_refresh": financial_refresh,
             "opportunity_trial": trial_on,
             "decision_assessment_required": trial_on and trial.settings().get("decision_assessment",False),
             "focus_codes": sorted(focus or []),
@@ -1070,7 +1078,8 @@ def refresh_trading_state(
             "intraday_requested": len(minute_codes),
             "intraday_ok": sum(1 for code in minute_codes if (minutes.get(code) or {}).get("last_time")),
             "fund_flow_ok": sum(1 for code in codes if (flows.get(code) or {}).get("detail")),
-            "fund_flow_fresh": sum(1 for code in codes if (flows.get(code) or {}).get("status") == "available"),
+            "fund_flow_fresh": sum(1 for code in codes if (flows.get(code) or {}).get("status") == "available" and (flows.get(code) or {}).get("source_date_verified")),
+            "fund_flow_date_unknown": sum(1 for code in codes if (flows.get(code) or {}).get("status") == "available" and not (flows.get(code) or {}).get("source_date_verified")),
             "fund_flow_cached": sum(1 for code in codes if (flows.get(code) or {}).get("status") == "cached"),
             "sector_membership_ok": sum(
                 1 for code in codes

@@ -39,12 +39,15 @@ def contexts(store, codes, setups, now=None):
             prior = conn.execute("SELECT * FROM stock_research_profiles WHERE code=?", (code,)).fetchone()
             if prior and prior["evidence_as_of"] > trial.stamp(now):
                 prior = None
-            financial = conn.execute("SELECT * FROM financial_factors WHERE code=? AND updated_at<=? ORDER BY period DESC LIMIT 1", (code,trial.stamp(now))).fetchone()
-            company = {k:v for k,v in dict(financial or {}).items() if k not in {"id","updated_at"}}
+            from data.research_financials import latest_financial
+            financial = latest_financial(conn,code,trial.stamp(now))
+            company = {k:v for k,v in financial.items() if k not in {"id","updated_at","refresh_error","evidence_stale"}}
             # A newly ingested older publication still counts as new knowledge.
-            news = conn.execute("""SELECT title,content,risk_level,score,publish_at FROM news_events
+            news = conn.execute("""SELECT title,content,risk_level,score,publish_at,url FROM news_events
               WHERE code=? AND created_at<=? AND (score>=2 OR risk_level IN ('high','高'))
-              ORDER BY created_at DESC,id DESC LIMIT 8""", (code,trial.stamp(now))).fetchall()
+              ORDER BY created_at DESC,id DESC LIMIT 32""", (code,trial.stamp(now))).fetchall()
+            from data.news_evidence import is_aggregate_news
+            news = [row for row in news if not is_aggregate_news(row)][:8]
             source = setups.get(code, {})
             extra = trial.obj(trial.obj(source.get("source")).get("extra"))
             route = trial.obj(extra.get("selector")).get("entry_route") or trial.obj(extra.get("ai_selection")).get("entry_route")

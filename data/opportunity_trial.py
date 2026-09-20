@@ -249,7 +249,7 @@ def record_decision(store, mode, decision, context, result, now=None):
               VALUES(?,?,?,?,?,?,?) ON CONFLICT(mode,code) DO UPDATE SET
               setup_id=excluded.setup_id,plan=excluded.plan,version=excluded.version,
               reviewed_at=excluded.reviewed_at,last_action=excluded.last_action""",
-              (mode,code,setup_id,encode(plan),version,stamp(now),row["action"]))
+              (mode,code,setup_id,encode(plan),version,context["as_of"],row["action"]))
             conn.execute("INSERT INTO opportunity_audit(mode,code,kind,payload,created_at) VALUES(?,?,?,?,?)",
                          (mode,code,"decision_and_execution",encode({"as_of":context["as_of"],"decision":row,"execution":result}),stamp(now)))
             # Complete only pre-existing unclaimed events; a separately claimed
@@ -323,11 +323,14 @@ def observe(store, mode, quotes, positions, now=None):
                 if level and (price >= level if direction > 0 else price <= level):
                     queue_event(conn,mode,code,setup_id,kind,version,payload,now)
             if plan and stored.get("reviewed_at"):
-                news = conn.execute("""SELECT title,content,risk_level,score,created_at FROM news_events
+                news = conn.execute("""SELECT title,content,risk_level,score,created_at,url FROM news_events
                     WHERE code=? AND created_at>? AND created_at<=?
-                    AND (score>=2 OR risk_level IN ('high','高')) ORDER BY created_at DESC LIMIT 2""",
+                    AND (score>=2 OR risk_level IN ('high','高')) ORDER BY created_at DESC LIMIT 20""",
                     (code,stored["reviewed_at"],stamp(now))).fetchall()
                 for item in news:
+                    from data.news_evidence import is_aggregate_news
+                    if is_aggregate_news(item):
+                        continue
                     digest=hashlib.sha256((str(item["title"])+str(item["content"])).encode()).hexdigest()[:16]
                     kind="logic_risk" if item["risk_level"] in {"high","高"} else "news_changed"
                     queue_event(conn,mode,code,setup_id,kind,digest,{"title":item["title"],"created_at":item["created_at"]},now)

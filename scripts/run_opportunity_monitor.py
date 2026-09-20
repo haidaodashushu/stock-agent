@@ -68,12 +68,15 @@ def summary(store):
     from data.stock_research import ensure_tables
     ensure_tables(store)
     with store._get_conn() as conn:
+        has_financials = conn.execute("SELECT 1 FROM sqlite_master WHERE name='research_company_inputs'").fetchone()
+        financials = dict(conn.execute("SELECT COUNT(*) cached,SUM(error!='') refresh_errors,MIN(fetched_at) oldest,MAX(fetched_at) newest FROM research_company_inputs").fetchone()) if has_financials else {"cached":0}
         has_assessments = conn.execute("SELECT 1 FROM sqlite_master WHERE name='trading_assessments'").fetchone()
         assessments = [dict(r) for r in conn.execute("""SELECT mode,action,research_grade,timing_grade,evidence_grade,
             portfolio_grade,COUNT(*) count FROM trading_assessments WHERE as_of>=?
             GROUP BY mode,action,research_grade,timing_grade,evidence_grade,portfolio_grade""", (str(datetime.now().date()),))] if has_assessments else []
         return {
             "config":trial.settings(),
+            "financial_inputs":financials,
             "monitor":dict(conn.execute("SELECT COUNT(*) runs,SUM(scope_count) observations,SUM(quote_ok) valid,MAX(elapsed_seconds) slowest_seconds FROM opportunity_monitor_runs WHERE created_at>=?",(str(datetime.now().date()),)).fetchone()),
             "events":[dict(r) for r in conn.execute("SELECT mode,status,kind,COUNT(*) count FROM opportunity_events WHERE created_at>=? GROUP BY mode,status,kind",(str(datetime.now().date()),))],
             "recent_failures":[dict(r) for r in conn.execute("SELECT mode,code,kind,error,created_at FROM opportunity_events WHERE status='needs_review' ORDER BY id DESC LIMIT 10")],

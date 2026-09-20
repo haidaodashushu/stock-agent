@@ -105,6 +105,11 @@ def submit_trading_decision(
         if executed_decision.get("status") != "ok":
             raise RuntimeError(str(executed_decision.get("error") or "executor rejected decision"))
         result = json.loads(result_path.read_text(encoding="utf-8"))
+        execution = result.get("execution")
+        if not isinstance(execution, dict):
+            raise RuntimeError("executor returned no execution receipt")
+        if execution.get("error") or execution.get("skipped"):
+            raise RuntimeError(str(execution.get("error") or "execution skipped"))
         report = completed.stdout.strip()
         if mode == "live" and not dry_run:
             fortune_path = run_dir / "fortune.txt"
@@ -118,7 +123,6 @@ def submit_trading_decision(
             )
             if fortune.returncode == 0 and fortune_path.exists():
                 report = report.rstrip() + "\n" + fortune_path.read_text(encoding="utf-8").strip()
-        complete_submission(store=store, key=claim.submission_key, result=result, report=report)
         if context.get("opportunity_trial") and not dry_run:
             from data.opportunity_trial import record_decision
             record_decision(store,mode,validated,context,result)
@@ -128,10 +132,12 @@ def submit_trading_decision(
             if context.get("decision_assessment_required"):
                 from data.trading_assessment import record
                 record(store,mode,validated,context)
-        enqueue_message(
-            store=store, submission_key=claim.submission_key,
-            message_type="text", content=report,
-        )
+        complete_submission(store=store, key=claim.submission_key, result=result, report=report)
+        if not dry_run:
+            enqueue_message(
+                store=store, submission_key=claim.submission_key,
+                message_type="text", content=report,
+            )
         return {
             "status": "submitted", "submission_key": claim.submission_key,
             "execution": result, "report": report,

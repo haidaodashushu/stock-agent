@@ -4,6 +4,14 @@ from data.news_evidence import build_news_evidence, match_policy_evidence
 
 
 class NewsEvidenceTests(unittest.TestCase):
+    def test_reindexed_directory_is_not_a_new_policy_or_risk_event(self):
+        evidence = build_news_evidence({"title":"华天科技资讯", "url":"https://basic.10jqka.com.cn/002185/news.html",
+            "content":"去年曾出现减持、监管函。工信部印发人工智能政策。", "publish_at":"2026-09-20 02:48:00",
+            "category":"policy_hotspot", "score":5, "risk_level":"high"})
+        self.assertEqual(evidence['published_at'],'')
+        self.assertEqual(evidence['risk'],'unknown')
+        self.assertEqual(match_policy_evidence([evidence],{'concepts':['人工智能']}),[])
+
     def test_body_drives_score_summary_and_trace_fields(self):
         evidence = build_news_evidence({
             "title": "有关部门发布最新通知",

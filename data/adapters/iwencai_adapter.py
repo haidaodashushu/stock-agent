@@ -70,7 +70,7 @@ class IwenCaiAdapter(DataSourceAdapter):
         for i in range(0, len(codes), self._batch_size):
             batch = codes[i : i + self._batch_size]
             names = ",".join(batch)
-            query = f"{names} 主力资金流向 大单净买入额 dde大单净额 小单净流入 资金流入 资金流出"
+            query = f"{names} {date_str} 主力资金流向 大单净买入额 dde大单净额 小单净流入 资金流入 资金流出"
             try:
                 raw = self._call_api(query, limit=len(batch))
             except Exception as exc:
@@ -93,7 +93,7 @@ class IwenCaiAdapter(DataSourceAdapter):
                 norm = self._normalize_code(code)
                 try:
                     raw_one = self._call_api(
-                        f"{code} 主力资金流向 大单净买入额 dde大单净额 小单净流入 资金流入 资金流出",
+                        f"{code} {date_str} 主力资金流向 大单净买入额 dde大单净额 小单净流入 资金流入 资金流出",
                         limit=1,
                     )
                     for item in raw_one.get("datas", []):
@@ -120,7 +120,7 @@ class IwenCaiAdapter(DataSourceAdapter):
     def get_fund_flow_top(self, n: int = 20, date: str = "") -> List[FundFlow]:
         """获取主力资金净流入排名前 N 的股票。"""
         date_str = date or datetime.now().strftime("%Y%m%d")
-        query = f"主力资金净流入排名 最新主力资金流向"
+        query = f"{date_str} 主力资金净流入排名 主力资金流向"
         raw = self._call_api(query, limit=min(n, 50))
 
         results: List[FundFlow] = []
@@ -258,8 +258,9 @@ class IwenCaiAdapter(DataSourceAdapter):
         retail_net = number("小单净买入额", "小单净流入")
         inflow, outflow = number("资金流入"), number("资金流出")
         total = inflow+outflow if inflow is not None and outflow is not None else None
+        dated_main = any(name.startswith("主力资金流向[") and f"[{requested}]" in name for name in item)
         return FundFlow(
-            code=self._normalize_code(str(code)), date=requested,
+            code=self._normalize_code(str(code)), date=requested if dated_main else "",
             main_net_inflow=main_net, big_net_inflow=big_net,
             retail_net_inflow=retail_net,
             main_net_pct=round(main_net/total*100,2) if total and total>0 else None,

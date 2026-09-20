@@ -48,6 +48,14 @@ def _value(row: Mapping[str, Any], key: str, default: Any = "") -> Any:
     return default if value is None else value
 
 
+def is_aggregate_news(row: Mapping[str, Any]) -> bool:
+    """A periodically re-indexed company directory is not a new event."""
+    url = str(_value(row, "url"))
+    title = str(_value(row, "title"))
+    return bool(re.search(r"basic\.10jqka\.com\.cn/\d{6}/(?:news|event)\.html", url)) or any(
+        marker in title for marker in ("资讯列表-新闻与股价联动", "公司大事-近期重要事件"))
+
+
 def parse_tags(value: Any) -> list[str]:
     if isinstance(value, (list, tuple)):
         return list(dict.fromkeys(str(item) for item in value if item))
@@ -134,7 +142,7 @@ def build_news_evidence(row: Mapping[str, Any]) -> dict[str, Any]:
     score = stored_score if use_stored else rescored.score
     sentiment = str(_value(row, "sentiment", rescored.sentiment)) if use_stored else rescored.sentiment
     risk_level = str(_value(row, "risk_level", rescored.risk_level)) if use_stored else rescored.risk_level
-    return {
+    result = {
         "title": _clip(title, 200),
         "summary": summary,
         "evidence_snippets": snippets,
@@ -154,6 +162,11 @@ def build_news_evidence(row: Mapping[str, Any]) -> dict[str, Any]:
         "source_tier": source_tier,
         "confidence": confidence,
     }
+    if is_aggregate_news(row):
+        result.update(evidence_type="aggregate_page", source_tier="directory", confidence="low",
+                      source_indexed_at=result["published_at"], published_at="",
+                      score=0, risk="unknown", sentiment="neutral")
+    return result
 
 
 def recent_policy_evidence(
