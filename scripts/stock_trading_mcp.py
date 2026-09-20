@@ -55,9 +55,9 @@ def trading_overview() -> dict:
 
 
 @mcp.tool()
-def stock_evidence(codes: list[str], as_of: str) -> dict:
-    """Get account-isolated evidence for in-scope codes using trading_overview.as_of."""
-    return get_stock_evidence(codes, as_of, MODE)
+def stock_evidence(codes: list[str], as_of: str, include_research_details: bool = False) -> dict:
+    """Get current data plus reusable research; request research details only when revising it."""
+    return get_stock_evidence(codes, as_of, MODE, include_research_details)
 
 
 @mcp.tool()

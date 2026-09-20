@@ -21,8 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def settings():
-    path = Path(os.environ.get("STOCK_OPPORTUNITY_CONFIG") or ROOT / "config/opportunity_trial.json")
-    return json.loads(path.read_text())
+    default = ROOT / "config/opportunity_trial.json"
+    values = json.loads(default.read_text())
+    path = Path(os.environ.get("STOCK_OPPORTUNITY_CONFIG") or default)
+    if path != default:
+        values.update(json.loads(path.read_text()))
+    return values
 
 
 def enabled():
@@ -152,6 +156,8 @@ def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=N
     ingest(store, current, now)
     setups = load_setups(store, now, holding_codes)
     plans = load_plans(store, mode)
+    from data.stock_research import contexts
+    research = contexts(store, list(setups), setups, now)
     current_by_code = {r["code"]: r for r in current}
     from data.live_manual_account import is_live_buy_allowed
 
@@ -173,7 +179,16 @@ def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=N
     # Least recently researched first; never discard an overflow candidate.
     eligible.sort(key=lambda c: (plans.get(c, {}).get("reviewed_at", ""),
                                 int(obj(obj(setups[c]["source"].get("extra")).get("ai_selection")).get("rank") or 999), c))
-    selected = eligible if focus_codes is not None else eligible[:settings()["candidate_batch_size"]]
+    selected = []
+    deep_count = 0
+    for code in eligible:
+        deep = research[code]["status"] != "ready"
+        if focus_codes is None and deep and deep_count >= settings()["deep_research_candidate_batch_size"]:
+            continue
+        selected.append(code)
+        deep_count += int(deep)
+        if focus_codes is None and len(selected) >= settings()["candidate_batch_size"]:
+            break
     result = []
     for code in selected:
         source = json.loads(encode(current_by_code.get(code) or setups[code]["source"]))
@@ -198,7 +213,7 @@ def validate_plan(raw):
             "invalidation_reason": str(raw.get("invalidation_reason") or "")[:240],
             "requalification_reason": str(raw.get("requalification_reason") or "")[:300],
             "requalified": raw.get("requalified") is True}
-    minutes = raw.get("review_after_minutes", 60)
+    minutes = raw.get("review_after_minutes", 30)
     if isinstance(minutes, bool) or not isinstance(minutes, int) or not 15 <= minutes <= 240:
         raise ValueError("watch_plan.review_after_minutes must be an integer between 15 and 240")
     plan["review_after_minutes"] = minutes
@@ -274,6 +289,8 @@ def observe(store, mode, quotes, positions, now=None):
     plans = load_plans(store, mode)
     old_quotes = read_cache(store, "monitor_quote", list(quotes), 3600, now)
     prior_account = read_cache(store, "monitor_account", [mode], 86400, now).get(mode)
+    from data.stock_research import contexts
+    research = contexts(store, list(set(setups)|set(positions)), setups, now)
     with store._get_conn() as conn:
         from data.live_manual_account import is_live_buy_allowed
         for code in set(setups) | set(positions):
@@ -294,7 +311,11 @@ def observe(store, mode, quotes, positions, now=None):
             payload = {"quote": q, "previous_quote": old_quotes.get(code), "plan": plan}
             version = stored.get("version", "initial")
             if not plan:
-                queue_event(conn, mode, code, setup_id, "research_due", version, payload, now)
+                kind = "new_opportunity" if setup.get("first_seen") == str(now.date()) else "research_due"
+                queue_event(conn, mode, code, setup_id, kind, version, payload, now)
+            if research[code].get("revision") and "company_news_or_setup_changed" in research[code]["reasons"]:
+                queue_event(conn,mode,code,setup_id,"research_changed",research[code]["facts_version"],
+                            {"research_revision":research[code]["revision"],"reasons":research[code]["reasons"]},now)
             for field, kind, direction in (("review_above","price_recovery",1),
                                            ("review_below","price_pullback",-1),
                                            ("invalidation_below","structure_risk",-1)):
@@ -358,10 +379,14 @@ def claim_events(store, mode, now=None):
                      (stamp(now),str(now.date())))
         last = conn.execute("SELECT MAX(substr(batch_id,instr(batch_id,':')+1)),COUNT(DISTINCT batch_id) FROM opportunity_events WHERE mode=? AND batch_id!='' AND created_at>=?",
                             (mode,str(now.date()))).fetchone()
-        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 ELSE 1 END,created_at,id",(mode,)).fetchall()
+        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='new_opportunity' THEN 1 ELSE 2 END,created_at,id",(mode,)).fetchall()
         risk = [r for r in rows if r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"}]
-        limited = last[1] >= cfg["max_event_runs_per_mode_per_day"] or (last[0] and last[0] > stamp(now-timedelta(minutes=cfg["event_cooldown_minutes"])))
-        rows = risk if limited else rows
+        exhausted = last[1] >= cfg["max_event_runs_per_mode_per_day"]
+        cooling = last[0] and last[0] > stamp(now-timedelta(minutes=cfg["event_cooldown_minutes"]))
+        if exhausted:
+            rows = risk
+        elif cooling:
+            rows = [r for r in rows if r in risk or r["kind"] == "new_opportunity"]
         # Expire last-session observations. Fresh observations can generate
         # today's event; old events never authorize a fresh account action.
         rows = [r for r in rows if r["created_at"][:10] == str(now.date())]

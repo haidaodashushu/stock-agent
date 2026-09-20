@@ -164,9 +164,19 @@ def trading_decision_contract(
         "review_below": "positive pullback/review price or null",
         "invalidation_below": "positive original structural risk level or null",
         "invalidation_reason": "required when invalid; distinguish portfolio reduction",
-        "review_after_minutes": "integer 15..240; use 60 when no price trigger is defensible",
+        "review_after_minutes": "integer 15..240; default 30 for incremental trading review",
         "requalified": "true only for an explicitly revalidated retained opportunity",
         "requalification_reason": "current route, structure, company evidence and account fit",
+    }
+    row_shape["research_update"] = {
+        "required_when":"stock.research.status=refresh_required, except risk-reducing exits; omit when reusing unchanged ready research",
+        "facts_version":"exact stock.research.facts_version from this snapshot",
+        "status":"ready|data_pending; data_pending forbids buy/add but permits risk reduction",
+        "thesis":"1..300 characters; stock thesis shared across accounts",
+        "company_view":"1..300 characters; business/financial conclusions, report period and missing evidence",
+        "trend_view":"1..300 characters; historical trend and structural interpretation",
+        "risks":"1..300 characters; falsifiable risks, separate facts from inference",
+        "refresh_condition":"1..300 characters; what would require revising this research",
     }
     decision_shape: dict[str, Any] = {
         "reviewed_codes": ["all required_evidence_codes"],

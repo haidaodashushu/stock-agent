@@ -901,6 +901,8 @@ def refresh_trading_state(
             flows[c] = {**flows[c], "status":"cached", "freshness":"cached", "cache_age_seconds":(datetime.now()-datetime.fromisoformat(flows[c]["observed_at"])).total_seconds()}
     as_of = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     news, policy_context = _news(store, codes, as_of)
+    from data.stock_research import contexts as research_contexts, daily_technical
+    research = research_contexts(store,codes,setups,datetime.fromisoformat(as_of)) if trial_on else {}
     with store._get_conn() as conn:
         fundamentals = {}
         for code in codes:
@@ -988,8 +990,9 @@ def refresh_trading_state(
             "position": simulated_position_payload(code, position),
             "live_position": live_position,
             "quote": quote,
-            "technical": technical_state(code, store),
+            "technical": daily_technical(store,code,technical_state) if trial_on else technical_state(code, store),
             "fundamental": fundamentals.get(code),
+            "research": research.get(code, {}),
             "opportunity": {
                 **{k:v for k,v in setups.get(code, {}).items() if k != "source"},
                 "previous_plan": plans.get(code),
@@ -1015,6 +1018,9 @@ def refresh_trading_state(
         }
 
     items = [item(code) for code in codes]
+    if trial_on:
+        from data.stock_research import annotate_changes
+        annotate_changes(store,mode,items,datetime.fromisoformat(as_of))
     _annotate_relative_strength(items)
     if mode == "simulated":
         account_policy.update(simulated_account_policy(
@@ -1053,6 +1059,8 @@ def refresh_trading_state(
             "collection_completed_at": completed_at,
             "scope_count": len(codes),
             "candidate_count": len(candidate_by_code),
+            "research_ready_count": sum(1 for r in research.values() if r.get("status") == "ready"),
+            "research_refresh_count": sum(1 for r in research.values() if r.get("status") != "ready"),
             "candidate_board": board_status,
             "holding_count": len(holding_by_code),
             "quote_ok": sum(1 for code in codes if _float((quotes.get(code) or {}).get("price")) > 0),

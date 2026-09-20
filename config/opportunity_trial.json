@@ -1,7 +1,9 @@
 {
   "enabled": false,
   "event_decisions": true,
-  "candidate_batch_size": 3,
+  "candidate_batch_size": 8,
+  "deep_research_candidate_batch_size": 3,
+  "research_valid_sessions": 5,
   "observation_sessions": 5,
   "quote_max_age_seconds": 240,
   "quote_cache_seconds": 45,

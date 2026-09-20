@@ -237,8 +237,15 @@ def _validate_trial_rows(rows: list[dict], context: dict) -> None:
     facts = {r["code"]:r for r in context["positions"]+context["candidates"]}
     for row in rows:
         row["watch_plan"] = validate_plan(row.get("watch_plan"))
+        research = facts[row["code"]].get("research") or {}
+        needs_research = research.get("status") != "ready" and row["action"] not in {"sell","reduce","clear"}
+        if research and (needs_research or row.get("research_update") is not None):
+            from data.stock_research import validate_update
+            row["research_update"] = validate_update(row.get("research_update"),research)
         if row["action"] not in {"buy", "add"}:
             continue
+        if research and (row.get("research_update") or {}).get("status") == "data_pending":
+            raise ValueError(f"{row['code']}: research data pending cannot support new risk")
         evidence = facts[row["code"]]
         if not valid_quote(evidence.get("quote", {}), now):
             raise ValueError(f"{row['code']}: fresh source-timestamped quote required")

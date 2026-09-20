@@ -122,6 +122,9 @@ def submit_trading_decision(
         if context.get("opportunity_trial") and not dry_run:
             from data.opportunity_trial import record_decision
             record_decision(store,mode,validated,context,result)
+            from data.stock_research import record_updates, record_observations
+            record_updates(store,validated,context)
+            record_observations(store,mode,context)
         enqueue_message(
             store=store, submission_key=claim.submission_key,
             message_type="text", content=report,

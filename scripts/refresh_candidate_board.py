@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,10 @@ def main() -> int:
         return 1
     if result.get("status") != "unchanged":
         print(json.dumps(result, ensure_ascii=False, indent=2 if args.pretty else None))
+        from data import opportunity_trial as trial
+        from data.market_calendar import is_actionable_trading_time
+        if trial.enabled() and is_actionable_trading_time(now):
+            subprocess.run([sys.executable,str(ROOT/"scripts/run_opportunity_monitor.py"),"--wake"],check=False)
     return 0
 
 

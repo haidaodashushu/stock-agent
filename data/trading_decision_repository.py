@@ -201,6 +201,7 @@ def _compact_stock(
     *,
     previous_decision: dict[str, Any] | None = None,
     entry_thesis: dict[str, Any] | None = None,
+    include_research_details: bool = False,
 ) -> dict[str, Any]:
     quote = _object(item.get("quote"))
     technical = _object(item.get("technical"))
@@ -216,6 +217,10 @@ def _compact_stock(
     promotion = _object(extra.get("candidate_promotion"))
     logic_change = _object(extra.get("logic_change"))
     fundamental = _object(item.get("fundamental")) or _object(extra.get("financial_factor")) or _object(extra.get("fundamental_llm"))
+    research = _object(item.get("research"))
+    if research.get("status") == "ready" and not include_research_details:
+        fundamental = {"period":fundamental.get("period"),"source":fundamental.get("source"),
+                       "research_revision":research.get("revision"),"detail":"unchanged; see research.profile"}
     ai_selection = _object(extra.get("ai_selection"))
     zone = _zone(technical, selector)
     entry_route = str(selector.get("entry_route") or "unclassified")
@@ -294,6 +299,8 @@ def _compact_stock(
             "promotion": promotion or None,
         },
         "opportunity": _object(item.get("opportunity")),
+        "research": research,
+        "changes_since_last_decision": _object(item.get("changes_since_last_decision")),
         "decision_context": {
             "previous": previous_decision or None,
             "entry_thesis": entry_thesis or None,
@@ -522,7 +529,7 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
 
 
 def get_stock_evidence(
-    codes: list[str], as_of: str, mode: TradingMode,
+    codes: list[str], as_of: str, mode: TradingMode, include_research_details: bool = False,
 ) -> dict[str, Any]:
     """Return detailed evidence projected for exactly one account mode."""
     normalized = list(dict.fromkeys(str(code).strip().zfill(6) for code in codes if str(code).strip()))
@@ -547,6 +554,7 @@ def get_stock_evidence(
                 str(by_code[code]["updated_at"]),
                 previous_decision=previous_by_code.get(code),
                 entry_thesis=entry_by_code.get(code),
+                include_research_details=include_research_details,
             ),
             mode,
         )
