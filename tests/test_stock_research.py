@@ -184,17 +184,27 @@ class StockResearchTests(unittest.TestCase):
                 self.assertIn("--event",call.args[0])
                 self.assertTrue(call.kwargs["start_new_session"])
 
-    def test_new_opportunity_bypasses_cooldown_but_respects_daily_budget(self):
+    def test_events_have_no_daily_quota_but_ordinary_events_keep_cooldown(self):
+        with self.store._get_conn() as conn:
+            for i in range(8):
+                at=trial.stamp(NOW-timedelta(minutes=40)+timedelta(minutes=i))
+                conn.execute("""INSERT INTO opportunity_events
+                    (mode,code,setup_id,kind,dedup,payload,created_at,status,batch_id)
+                    VALUES('simulated','002189','history','new_opportunity',?,'{}',?,'done',?)""",
+                    (f"prior-{i}",at,f"simulated:{at}"))
         trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
-        trial.finish_events(self.store,trial.claim_events(self.store,"simulated",NOW),True)
+        first=trial.claim_events(self.store,"simulated",NOW)
+        self.assertTrue(first)
+        trial.finish_events(self.store,first,True)
         later=NOW+timedelta(minutes=1)
-        trial.ingest(self.store,[candidate("002186",str(NOW.date()))],later)
-        trial.observe(self.store,"simulated",{"002186":quote(now=later)},{},later)
-        cfg=trial.settings()|{"max_event_runs_per_mode_per_day":1}
-        with patch.object(trial,"settings",return_value=cfg):
-            self.assertEqual(trial.claim_events(self.store,"simulated",later),[])
+        trial.ingest(self.store,[candidate("002186",str(NOW.date())),candidate("002187")],later)
+        trial.observe(self.store,"simulated",{c:quote(now=later) for c in ("002186","002187")},{},later)
         rows=trial.claim_events(self.store,"simulated",later)
         self.assertEqual([r["kind"] for r in rows],["new_opportunity"])
+        trial.finish_events(self.store,rows,True)
+        self.assertEqual(trial.claim_events(self.store,"simulated",later+timedelta(minutes=19)),[])
+        rows=trial.claim_events(self.store,"simulated",later+timedelta(minutes=20))
+        self.assertEqual([(r["code"],r["kind"]) for r in rows],[("002187","research_due")])
 
 
 if __name__=="__main__":

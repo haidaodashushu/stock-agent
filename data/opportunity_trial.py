@@ -427,14 +427,13 @@ def claim_events(store, mode, now=None):
         timed = [r for r in batches if not r["risk"] and r["timed"]]
         def cooling(batches, minutes):
             return bool(batches and max(r["batch_id"].split(":",1)[1] for r in batches) > stamp(now-timedelta(minutes=minutes)))
-        exhausted = len(ordinary) >= cfg["max_event_runs_per_mode_per_day"]
         ordinary_cooling = cooling(ordinary, cfg["event_cooldown_minutes"])
         review_allowed = not cooling(timed, cfg["review_cooldown_minutes"])
         rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='holding_review_due' THEN 1 WHEN kind='new_opportunity' THEN 2 WHEN kind='review_due' THEN 3 ELSE 4 END,created_at,id",(mode,)).fetchall()
         rows = [r for r in rows if
                 r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"} or
                 (review_allowed if r["kind"] in {"review_due","holding_review_due"} else
-                 not exhausted and (not ordinary_cooling or r["kind"] == "new_opportunity"))]
+                 not ordinary_cooling or r["kind"] == "new_opportunity")]
         # Expire last-session observations. Fresh observations can generate
         # today's event; old events never authorize a fresh account action.
         rows = [r for r in rows if r["created_at"][:10] == str(now.date())]
