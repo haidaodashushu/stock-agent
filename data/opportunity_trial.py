@@ -429,7 +429,7 @@ def claim_events(store, mode, now=None):
             return bool(batches and max(r["batch_id"].split(":",1)[1] for r in batches) > stamp(now-timedelta(minutes=minutes)))
         exhausted = len(ordinary) >= cfg["max_event_runs_per_mode_per_day"]
         ordinary_cooling = cooling(ordinary, cfg["event_cooldown_minutes"])
-        review_allowed = len(timed) < cfg["max_review_runs_per_mode_per_day"] and not cooling(timed, cfg["review_cooldown_minutes"])
+        review_allowed = not cooling(timed, cfg["review_cooldown_minutes"])
         rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='holding_review_due' THEN 1 WHEN kind='new_opportunity' THEN 2 WHEN kind='review_due' THEN 3 ELSE 4 END,created_at,id",(mode,)).fetchall()
         rows = [r for r in rows if
                 r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"} or

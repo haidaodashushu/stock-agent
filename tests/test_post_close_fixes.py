@@ -109,21 +109,38 @@ class DueReviewTests(unittest.TestCase):
         with patch.object(trial, "market_day", side_effect=lambda d: type("Day", (), {"is_open": d.date().isoformat()=="2026-09-23"})()):
             self.assertEqual(trial.next_review_at("2026-09-21 15:00:00", 15), "2026-09-23 09:45:00")
 
-    def test_ordinary_budget_does_not_block_due_but_review_budget_does(self):
+    def test_due_review_has_no_daily_quota_even_after_many_prior_batches(self):
         self.record()
         due = NOW+timedelta(minutes=15)
         self.observe(due)
-        cfg = trial.settings() | {"max_event_runs_per_mode_per_day": 0, "max_review_runs_per_mode_per_day": 0}
-        with patch.object(trial, "settings", return_value=cfg):
-            self.assertEqual(trial.claim_events(self.store, "simulated", due), [])
-        cfg["max_review_runs_per_mode_per_day"] = 1
+        with self.store._get_conn() as conn:
+            for i in range(17):
+                at = trial.stamp(NOW-timedelta(minutes=40)+timedelta(seconds=i))
+                conn.execute("""INSERT INTO opportunity_events
+                    (mode,code,setup_id,kind,dedup,payload,created_at,status,batch_id)
+                    VALUES('simulated','002189','history','review_due',?,'{}',?,'done',?)""",
+                    (f"history-{i}",at,f"simulated:{at}"))
+        cfg = trial.settings() | {"max_event_runs_per_mode_per_day": 0}
         with patch.object(trial, "settings", return_value=cfg):
             rows = trial.claim_events(self.store, "simulated", due)
             self.assertEqual([r["kind"] for r in rows], ["review_due"])
             trial.finish_events(self.store, rows, True)
             self.record(due)
             self.observe(due+timedelta(minutes=15))
-            self.assertEqual(trial.claim_events(self.store, "simulated", due+timedelta(minutes=15)), [])
+            self.assertEqual([r["kind"] for r in trial.claim_events(self.store, "simulated", due+timedelta(minutes=15))], ["review_due"])
+
+    def test_due_review_still_respects_account_cooldown(self):
+        self.record()
+        due = NOW+timedelta(minutes=15)
+        self.observe(due)
+        at = trial.stamp(due-timedelta(minutes=1))
+        with self.store._get_conn() as conn:
+            conn.execute("""INSERT INTO opportunity_events
+                (mode,code,setup_id,kind,dedup,payload,created_at,status,batch_id)
+                VALUES('simulated','002189','history','review_due','recent','{}',?,'done',?)""",
+                (at,f"simulated:{at}"))
+        self.assertEqual(trial.claim_events(self.store, "simulated", due), [])
+        self.assertEqual([r["kind"] for r in trial.claim_events(self.store, "simulated", due+timedelta(minutes=14))], ["review_due"])
 
     def test_holdings_are_prioritized_and_superseded_timers_do_not_replay(self):
         self.record()
