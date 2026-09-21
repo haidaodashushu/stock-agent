@@ -5,6 +5,15 @@ from datetime import datetime
 import math
 import pandas as pd
 
+MINUTE_TIME_POLICY = "labels_before_cutoff_minute_v2"
+
+
+def reusable_minutes(value: dict, now: datetime, max_age: int = 300) -> bool:
+    source = source_datetime(value.get("source_time"))
+    return bool(value.get("time_policy") == MINUTE_TIME_POLICY and not value.get("error")
+                and source and source.date() == now.date()
+                and 0 <= (now-source).total_seconds() <= max_age)
+
 
 def source_datetime(value):
     text = str(value or "").strip()
@@ -30,7 +39,8 @@ def valid_quote(row: dict, now: datetime, max_age: int = 240) -> bool:
 def summarize_minutes(frame: pd.DataFrame, now: datetime | None = None) -> dict:
     now = now or datetime.now()
     missing = {"available": False, "lookback": "30_trading_minutes"}
-    result = {"source": "tencent_ifzq", "half_hour": missing}
+    result = {"source": "tencent_ifzq", "half_hour": missing,
+              "time_policy": MINUTE_TIME_POLICY, "cutoff_at": now.isoformat(sep=" ", timespec="seconds")}
     if frame is None or frame.empty:
         return {**result, "error": "minute series missing"}
     day = str(frame.attrs.get("trading_date") or "").replace("-", "")
@@ -45,6 +55,17 @@ def summarize_minutes(frame: pd.DataFrame, now: datetime | None = None) -> dict:
         stamps = [datetime.strptime(day + t, "%Y%m%d%H%M") for t in rows["time"]]
         if any((t - now).total_seconds() > 60 for t in stamps):
             raise ValueError("minute timestamp is in the future")
+        # The provider may label the currently forming interval with the next
+        # minute. Do not relabel it or let it affect ANY derived metric. Until
+        # interval semantics are verified, exclude current-minute labels too.
+        cutoff = now.replace(second=0, microsecond=0)
+        result["latest_provider_time"] = stamps[-1].isoformat(sep=" ")
+        keep = [t < cutoff for t in stamps]
+        result["excluded_incomplete_points"] = len(keep) - sum(keep)
+        rows = rows.loc[keep].copy()
+        stamps = [t for t in stamps if t < cutoff]
+        if not stamps:
+            raise ValueError("no completed minute before cutoff")
         if now.hour < 15 and (now - stamps[-1]).total_seconds() > 300:
             raise ValueError("minute source is stale")
         for key in ("price", "volume", "amount"):

@@ -40,12 +40,15 @@
 当 overview.refresh.opportunity_trial=true 时，每行提交 watch_plan，遵循 decision_contract。
 读取 opportunity.previous_plan 与原始机会档案，保留尚未证伪的原论据和结构失效位置；变更条件须在 wait_reason 说明新证据。
 review_above/review_below 是程序唤醒条件，不是自动买卖指令；价格必须来自本轮可核验的结构，不得为填字段编造。
-没有可靠价格条件时填 null，明确缺什么证据并设置 review_after_minutes；程序定时兜底处理。
+没有可靠价格条件时填 null，明确缺什么证据并设置 review_after_minutes（交易分钟）；程序生成去重的到期复核事件。
+previous_plan.next_review_at是上一轮计划的最早复核目标，午休、休市及尾盘启动保护会顺延。监测约3分钟一轮，账户互斥和独立复核额度可能导致排队；不得声称模型一定在该时刻完成。持仓复核优先，候选到期按等待顺序分批，避免所有观察股每15分钟重复调用。
 历史机会的 requires_requalification=true 表示只有观察权。新买入须当轮重新核验路线、结构和公司证据，明确
 requalified=true 与 requalification_reason；不能把旧名单资格当作当前资格。源行情过期或日线未验证时不新买。
 事件重评集中解释本次新变化，其他持仓仍逐一检查风险。正常波动保持原计划，不因调用频率提高而增加交易。
 state区分逻辑失败、数据待补、账户受限、等待和持仓；减仓或卖出建议不能伪装成已经成交，后续以实际账户为准。
 基本面需核对报告期与来源；资金流与缓存分时只按各自源日期和新鲜程度使用，不能当成刚刚发生的新确认。
+分时time_policy=labels_before_cutoff_minute_v2表示程序已剔除抓取时所在分钟及之后的标签，所有VWAP、回撤与量价指标只由此前数据重算。
+source_time是实际参与计算的最后一分钟；cutoff_at是计算截止时刻。excluded_incomplete_points>0只是尾部剔除数量，不表示剩余历史分时不可用；仍须核查源年龄、error及has_gaps。
 
 ## 复用研究与增量操盘
 

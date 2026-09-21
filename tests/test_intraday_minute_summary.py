@@ -37,7 +37,7 @@ class IntradayMinuteSummaryTest(unittest.TestCase):
         from data.trading_data_quality import summarize_minutes
         frame = pd.DataFrame(rows)
         frame.attrs["trading_date"] = "20260918"
-        summary = summarize_minutes(frame,datetime(2026,9,18,10,30))
+        summary = summarize_minutes(frame,datetime(2026,9,18,10,31))
 
         half_hour = summary["half_hour"]
         self.assertTrue(half_hour["available"])

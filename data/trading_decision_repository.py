@@ -346,6 +346,9 @@ def _compact_stock(
             "rs_60d_percentile": technical.get("rs_60d_percentile"),
         },
         "intraday": {
+            "time_policy": intraday.get("time_policy"),
+            "cutoff_at": intraday.get("cutoff_at"),
+            "excluded_incomplete_points": intraday.get("excluded_incomplete_points"),
             "source_trade_date": intraday.get("source_trade_date"),
             "source_time": intraday.get("source_time"),
             "has_gaps": intraday.get("has_gaps"),

@@ -45,7 +45,7 @@ class OpportunityTrialTests(unittest.TestCase):
 
     def record(self,code="002185",p=None,mode="simulated",now=NOW-timedelta(minutes=30)):
         trial.record_decision(self.store,mode,{"signals" if mode=="simulated" else "decisions":[{
-           "code":code,"action":"watch","watch_plan":p or plan()}]},
+           "code":code,"action":"watch","watch_plan":p or plan(review_after_minutes=60)}]},
            {"as_of":trial.stamp(now),"positions":[]},{"results":[]},now)
 
     def test_missing_next_daily_list_retains_observation_not_buy_permission(self):
@@ -226,7 +226,7 @@ class DataQualityTests(unittest.TestCase):
         self.assertIsNone(summarize_minutes(frame,now)["vwap"])
 
     def test_first_half_hour_price_is_available_without_volume_comparison(self):
-        value=summarize_minutes(self.frame(31),NOW.replace(hour=10,minute=0))
+        value=summarize_minutes(self.frame(31),NOW.replace(hour=10,minute=1))
         self.assertEqual(value["half_hour"]["price_change_pct"],0)
         self.assertFalse(value["half_hour"]["available"])
 

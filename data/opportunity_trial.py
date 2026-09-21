@@ -147,8 +147,37 @@ def load_setups(store, now=None, include_codes=()):
 def load_plans(store, mode):
     ensure_tables(store)
     with store._get_conn() as conn:
-        return {r["code"]: {**dict(r), "plan": obj(r["plan"])} for r in
-                conn.execute("SELECT * FROM opportunity_plans WHERE mode=?", (mode,))}
+        result = {r["code"]: {**dict(r), "plan": obj(r["plan"])} for r in
+                  conn.execute("SELECT * FROM opportunity_plans WHERE mode=?", (mode,))}
+    for row in result.values():
+        row["next_review_at"] = next_review_at(row["reviewed_at"], row["plan"].get("review_after_minutes", 30))
+    return result
+
+
+def next_review_at(reviewed_at, minutes):
+    """Add trading minutes, then align to a time the event worker can start."""
+    current = datetime.fromisoformat(reviewed_at)
+    remaining = timedelta(minutes=minutes)
+    for _ in range(370):
+        if market_day(current).is_open:
+            for h1, m1, h2, m2 in ((9,30,11,30), (13,0,15,0)):
+                start = current.replace(hour=h1, minute=m1, second=0, microsecond=0)
+                end = current.replace(hour=h2, minute=m2, second=0, microsecond=0)
+                if current >= end:
+                    continue
+                current = max(current, start)
+                if remaining < end-current:
+                    due = current + remaining
+                    # Existing workers stop opening event runs five minutes
+                    # before session end, allowing models time to finish.
+                    if due < end-timedelta(minutes=5):
+                        return stamp(due)
+                    current, remaining = end, timedelta(0)
+                else:
+                    remaining -= end-current
+                    current = end
+        current = (current+timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    raise ValueError("no review trading session within one year")
 
 
 def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=None):
@@ -171,9 +200,7 @@ def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=N
         if focus_codes is not None and code not in focus_codes:
             continue
         if focus_codes is None and plan.get("reviewed_at") and plan.get("setup_id") == setup["setup_id"]:
-            reviewed = datetime.fromisoformat(plan["reviewed_at"])
-            minutes = int(plan.get("plan", {}).get("review_after_minutes",60))
-            if reviewed.date() == now.date() and now < reviewed + timedelta(minutes=minutes):
+            if stamp(now) < plan["next_review_at"]:
                 continue
         eligible.append(code)
     # Least recently researched first; never discard an overflow candidate.
@@ -310,6 +337,11 @@ def observe(store, mode, quotes, positions, now=None):
             price = float(q["price"])
             payload = {"quote": q, "previous_quote": old_quotes.get(code), "plan": plan}
             version = stored.get("version", "initial")
+            due = stored.get("next_review_at")
+            if plan and due and stamp(now) >= due:
+                kind = "holding_review_due" if code in positions else "review_due"
+                queue_event(conn, mode, code, setup_id, kind, stored["reviewed_at"],
+                            {**payload, "due_at": due, "reviewed_at": stored["reviewed_at"]}, now)
             if not plan:
                 kind = "new_opportunity" if setup.get("first_seen") == str(now.date()) else "research_due"
                 queue_event(conn, mode, code, setup_id, kind, version, payload, now)
@@ -380,20 +412,37 @@ def claim_events(store, mode, now=None):
                      (stamp(now),stamp(now-timedelta(minutes=cfg["event_max_age_minutes"]))))
         conn.execute("UPDATE opportunity_events SET status='expired',finished_at=? WHERE status='pending' AND created_at<?",
                      (stamp(now),str(now.date())))
-        last = conn.execute("SELECT MAX(substr(batch_id,instr(batch_id,':')+1)),COUNT(DISTINCT batch_id) FROM opportunity_events WHERE mode=? AND batch_id!='' AND created_at>=?",
-                            (mode,str(now.date()))).fetchone()
-        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='new_opportunity' THEN 1 ELSE 2 END,created_at,id",(mode,)).fetchall()
-        risk = [r for r in rows if r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"}]
-        exhausted = last[1] >= cfg["max_event_runs_per_mode_per_day"]
-        cooling = last[0] and last[0] > stamp(now-timedelta(minutes=cfg["event_cooldown_minutes"]))
-        if exhausted:
-            rows = risk
-        elif cooling:
-            rows = [r for r in rows if r in risk or r["kind"] == "new_opportunity"]
+        # A slow completed decision can supersede a timer queued during the
+        # model call. Discard that old timer instead of immediately re-running.
+        for row in conn.execute("SELECT id,code,payload FROM opportunity_events WHERE mode=? AND status='pending' AND kind IN ('review_due','holding_review_due')", (mode,)).fetchall():
+            plan = conn.execute("SELECT reviewed_at FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
+            if not plan or plan["reviewed_at"] != obj(row["payload"]).get("reviewed_at"):
+                conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='review superseded' WHERE id=?", (stamp(now),row["id"]))
+        batches = conn.execute("""SELECT batch_id,
+            MAX(kind IN ('structure_risk','holding_fast_drop','logic_risk')) risk,
+            MAX(kind IN ('review_due','holding_review_due')) timed
+            FROM opportunity_events WHERE mode=? AND batch_id!=''
+            AND substr(batch_id,instr(batch_id,':')+1)>=? GROUP BY batch_id""", (mode,str(now.date()))).fetchall()
+        ordinary = [r for r in batches if not r["risk"] and not r["timed"]]
+        timed = [r for r in batches if not r["risk"] and r["timed"]]
+        def cooling(batches, minutes):
+            return bool(batches and max(r["batch_id"].split(":",1)[1] for r in batches) > stamp(now-timedelta(minutes=minutes)))
+        exhausted = len(ordinary) >= cfg["max_event_runs_per_mode_per_day"]
+        ordinary_cooling = cooling(ordinary, cfg["event_cooldown_minutes"])
+        review_allowed = len(timed) < cfg["max_review_runs_per_mode_per_day"] and not cooling(timed, cfg["review_cooldown_minutes"])
+        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='holding_review_due' THEN 1 WHEN kind='new_opportunity' THEN 2 WHEN kind='review_due' THEN 3 ELSE 4 END,created_at,id",(mode,)).fetchall()
+        rows = [r for r in rows if
+                r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"} or
+                (review_allowed if r["kind"] in {"review_due","holding_review_due"} else
+                 not exhausted and (not ordinary_cooling or r["kind"] == "new_opportunity"))]
         # Expire last-session observations. Fresh observations can generate
         # today's event; old events never authorize a fresh account action.
         rows = [r for r in rows if r["created_at"][:10] == str(now.date())]
-        codes = list(dict.fromkeys(r["code"] for r in rows))[:cfg["event_batch_size"]]
+        # Every decision already reviews all actual holdings. Coalesce their
+        # timers into that single account review; they must not consume all
+        # candidate slots and starve due candidates on every 15-minute tick.
+        holding_due = list(dict.fromkeys(r["code"] for r in rows if r["kind"] == "holding_review_due"))
+        codes = holding_due + list(dict.fromkeys(r["code"] for r in rows if r["code"] not in holding_due))[:cfg["event_batch_size"]]
         selected = [dict(r) for r in rows if r["code"] in codes]
         if not selected:
             return []

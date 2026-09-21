@@ -863,6 +863,8 @@ def refresh_trading_state(
     # candidates impossible to assess on VWAP and half-hour volume/price.
     minute_codes = _minute_scope(codes, minute_limit)
     cached_minutes = trial.read_cache(store,"minute",codes,trial.settings()["minute_cache_seconds"],now) if trial_on else {}
+    from data.trading_data_quality import reusable_minutes
+    cached_minutes = {c:v for c,v in cached_minutes.items() if reusable_minutes(v, now)}
     # Event-affected stocks always get new minute evidence. Other holdings may
     # reuse explicitly timestamped minutes; all quotes remain fresh.
     minute_codes = [c for c in minute_codes if c not in cached_minutes or (focus and c in focus)]
