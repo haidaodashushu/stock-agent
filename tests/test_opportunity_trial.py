@@ -94,7 +94,7 @@ class OpportunityTrialTests(unittest.TestCase):
         trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
         self.assertEqual(trial.claim_events(self.store,"simulated",NOW+timedelta(minutes=30)),[])
 
-    def test_risk_event_bypasses_ordinary_cooldown(self):
+    def test_risk_event_has_priority_over_position_change(self):
         trial.ingest(self.store,[candidate()],NOW)
         self.record()
         trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
@@ -103,7 +103,7 @@ class OpportunityTrialTests(unittest.TestCase):
         later=NOW+timedelta(minutes=3)
         trial.observe(self.store,"simulated",{"002185":quote(15.4,later)},{"002185":100},later)
         risk=trial.claim_events(self.store,"simulated",later)
-        self.assertEqual([r["kind"] for r in risk],["structure_risk"])
+        self.assertEqual([r["kind"] for r in risk],["structure_risk", "position_changed"])
 
     def test_live_blocked_market_does_not_enter_research_queue(self):
         trial.ingest(self.store,[candidate("300236")],NOW)
@@ -112,6 +112,29 @@ class OpportunityTrialTests(unittest.TestCase):
             selected,_,_,_=trial.candidate_scope(self.store,"live",[],[],now=NOW)
         self.assertEqual(selected,[])
         self.assertEqual(trial.claim_events(self.store,"live",NOW),[])
+
+    def test_pending_overflow_can_run_next_batch_without_account_delay(self):
+        codes=[f"00218{i}" for i in range(5)]
+        trial.ingest(self.store,[candidate(c,str(NOW.date())) for c in codes],NOW)
+        trial.observe(self.store,"simulated",{c:quote() for c in codes},{},NOW)
+        cfg=trial.settings()|{"event_batch_size":2}
+        seen=[]
+        with patch.object(trial,"settings",return_value=cfg):
+            for minute,size in enumerate((2,2,1)):
+                rows=trial.claim_events(self.store,"simulated",NOW+timedelta(minutes=minute))
+                self.assertEqual(len(rows),size)
+                seen.extend(r["code"] for r in rows)
+                trial.finish_events(self.store,rows,True)
+            self.assertEqual(trial.claim_events(self.store,"simulated",NOW+timedelta(minutes=3)),[])
+        self.assertEqual(len(set(seen)),5)
+
+    def test_stale_price_event_still_expires_without_cooldown(self):
+        trial.ingest(self.store,[candidate()],NOW)
+        self.record()
+        trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
+        self.assertEqual(trial.claim_events(self.store,"simulated",NOW+timedelta(minutes=16)),[])
+        with self.store._get_conn() as conn:
+            self.assertEqual(conn.execute("SELECT status FROM opportunity_events WHERE kind='price_recovery'").fetchone()[0],"expired")
 
     def test_new_news_is_deduplicated_and_trigger_evidence_is_account_scoped(self):
         trial.ingest(self.store,[candidate()],NOW)

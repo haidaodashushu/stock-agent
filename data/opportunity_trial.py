@@ -418,22 +418,10 @@ def claim_events(store, mode, now=None):
             plan = conn.execute("SELECT reviewed_at FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
             if not plan or plan["reviewed_at"] != obj(row["payload"]).get("reviewed_at"):
                 conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='review superseded' WHERE id=?", (stamp(now),row["id"]))
-        batches = conn.execute("""SELECT batch_id,
-            MAX(kind IN ('structure_risk','holding_fast_drop','logic_risk')) risk,
-            MAX(kind IN ('review_due','holding_review_due')) timed
-            FROM opportunity_events WHERE mode=? AND batch_id!=''
-            AND substr(batch_id,instr(batch_id,':')+1)>=? GROUP BY batch_id""", (mode,str(now.date()))).fetchall()
-        ordinary = [r for r in batches if not r["risk"] and not r["timed"]]
-        timed = [r for r in batches if not r["risk"] and r["timed"]]
-        def cooling(batches, minutes):
-            return bool(batches and max(r["batch_id"].split(":",1)[1] for r in batches) > stamp(now-timedelta(minutes=minutes)))
-        ordinary_cooling = cooling(ordinary, cfg["event_cooldown_minutes"])
-        review_allowed = not cooling(timed, cfg["review_cooldown_minutes"])
+        # Each event carries its own eligibility (a changed condition or a due
+        # plan). No additional account-wide quota or cooldown delays it. The
+        # worker holds the account lock before claiming and refreshing facts.
         rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='holding_review_due' THEN 1 WHEN kind='new_opportunity' THEN 2 WHEN kind='review_due' THEN 3 ELSE 4 END,created_at,id",(mode,)).fetchall()
-        rows = [r for r in rows if
-                r["kind"] in {"structure_risk","holding_fast_drop","logic_risk"} or
-                (review_allowed if r["kind"] in {"review_due","holding_review_due"} else
-                 not ordinary_cooling or r["kind"] == "new_opportunity")]
         # Expire last-session observations. Fresh observations can generate
         # today's event; old events never authorize a fresh account action.
         rows = [r for r in rows if r["created_at"][:10] == str(now.date())]

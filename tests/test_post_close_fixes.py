@@ -127,7 +127,7 @@ class DueReviewTests(unittest.TestCase):
         self.observe(due+timedelta(minutes=15))
         self.assertEqual([r["kind"] for r in trial.claim_events(self.store, "simulated", due+timedelta(minutes=15))], ["review_due"])
 
-    def test_due_review_still_respects_account_cooldown(self):
+    def test_due_review_does_not_wait_after_another_stocks_recent_review(self):
         self.record()
         due = NOW+timedelta(minutes=15)
         self.observe(due)
@@ -137,8 +137,11 @@ class DueReviewTests(unittest.TestCase):
                 (mode,code,setup_id,kind,dedup,payload,created_at,status,batch_id)
                 VALUES('simulated','002189','history','review_due','recent','{}',?,'done',?)""",
                 (at,f"simulated:{at}"))
-        self.assertEqual(trial.claim_events(self.store, "simulated", due), [])
-        self.assertEqual([r["kind"] for r in trial.claim_events(self.store, "simulated", due+timedelta(minutes=14))], ["review_due"])
+        rows = trial.claim_events(self.store, "simulated", due)
+        self.assertEqual([r["kind"] for r in rows], ["review_due"])
+        trial.finish_events(self.store, rows, True)
+        self.observe(due+timedelta(minutes=1))
+        self.assertEqual(trial.claim_events(self.store, "simulated", due+timedelta(minutes=1)), [])
 
     def test_holdings_are_prioritized_and_superseded_timers_do_not_replay(self):
         self.record()

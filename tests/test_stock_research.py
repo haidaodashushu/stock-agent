@@ -184,7 +184,7 @@ class StockResearchTests(unittest.TestCase):
                 self.assertIn("--event",call.args[0])
                 self.assertTrue(call.kwargs["start_new_session"])
 
-    def test_events_have_no_daily_quota_but_ordinary_events_keep_cooldown(self):
+    def test_new_and_ordinary_events_have_no_daily_quota_or_extra_cooldown(self):
         with self.store._get_conn() as conn:
             for i in range(8):
                 at=trial.stamp(NOW-timedelta(minutes=40)+timedelta(minutes=i))
@@ -200,11 +200,11 @@ class StockResearchTests(unittest.TestCase):
         trial.ingest(self.store,[candidate("002186",str(NOW.date())),candidate("002187")],later)
         trial.observe(self.store,"simulated",{c:quote(now=later) for c in ("002186","002187")},{},later)
         rows=trial.claim_events(self.store,"simulated",later)
-        self.assertEqual([r["kind"] for r in rows],["new_opportunity"])
+        self.assertEqual([(r["code"],r["kind"]) for r in rows],[("002186","new_opportunity"),("002187","research_due")])
         trial.finish_events(self.store,rows,True)
-        self.assertEqual(trial.claim_events(self.store,"simulated",later+timedelta(minutes=19)),[])
-        rows=trial.claim_events(self.store,"simulated",later+timedelta(minutes=20))
-        self.assertEqual([(r["code"],r["kind"]) for r in rows],[("002187","research_due")])
+        again=later+timedelta(minutes=1)
+        trial.observe(self.store,"simulated",{c:quote(now=again) for c in ("002186","002187")},{},again)
+        self.assertEqual(trial.claim_events(self.store,"simulated",again),[])
 
 
 if __name__=="__main__":
