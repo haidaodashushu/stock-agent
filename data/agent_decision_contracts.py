@@ -255,6 +255,7 @@ def trading_decision_contract(
             "entry_requirements":"research strong/moderate, timing ready, evidence reliable/partial, portfolio fit/conditional; grades never offset hard constraints",
             "strong_entry_confidence":"reliable evidence, price_structure support plus another independent supported family; repeat family/path forbidden",
             "confirmation_source_prefixes": FAMILY_PATHS,
+            "fund_flow_support": "requires fund_flow.status=available AND source_date_verified=true; cached or unverified flow is background only. Remove invalid support confirmations and reassess confidence; changing basis text alone does not fix validation",
             "market_label":"only index snapshot background; classification_usable=false means unknown, not neutral evidence",
         },
         "hard_constraints": {

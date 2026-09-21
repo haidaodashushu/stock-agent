@@ -3,6 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from data import trading_assessment as assessment
 from data.market_regime import classify_market_regime
@@ -10,6 +11,7 @@ from data.store.sqlite_store import StockStore
 from scripts.execute_trading_cycle import validate_simulated_decision,validate_live_decision
 from tests.test_opportunity_trial import NOW,plan,quote
 from tests.test_stock_research import update
+from data import trading_decision_repository as repository
 
 
 def fixture():
@@ -108,6 +110,31 @@ class TradingAssessmentTests(unittest.TestCase):
         row["assessment"]["confirmations"][1]["source_path"]="fund_flow.main_net"
         with self.assertRaisesRegex(ValueError,"background"):
             validate_simulated_decision({"signals":[row]},context)
+
+    def test_fund_date_verification_survives_model_and_executor_views(self):
+        for status, verified, allowed in [("available", True, True), ("cached", True, False),
+                                           ("available", False, False), ("available", None, False)]:
+            with self.subTest(status=status, verified=verified):
+                row, context = fixture()
+                item = {"code": row["code"], "is_candidate": True, "fund_flow": {
+                    "status": status, "source_date_verified": verified,
+                    "detail": {"date": "20260917", "main_net_inflow": 12345}}}
+                as_of = context["as_of"]
+                snapshot = ({"stage": "1012"}, [{"payload": json.dumps(item), "updated_at": as_of}], as_of)
+                model_flow = repository._compact_stock(item, as_of)["fund_flow"]
+                with patch.object(repository, "_connect"), patch.object(repository, "_snapshot", return_value=snapshot):
+                    executor_flow = repository.build_execution_context(as_of, "simulated")["candidates"][0]["fund_flow"]
+                self.assertEqual(model_flow, executor_flow)
+                context["candidates"][0]["fund_flow"] = executor_flow
+                row["assessment"]["confirmations"][1]["source_path"] = "fund_flow.main_net"
+                if allowed:
+                    self.assertEqual(validate_simulated_decision({"signals": [row]}, context)["signals"][0]["action"], "buy")
+                else:
+                    with self.assertRaisesRegex(ValueError, "002185: fund_flow.main_net.*source_date_verified"):
+                        validate_simulated_decision({"signals": [row]}, context)
+                    row["action"] = "watch"
+                    row["assessment"]["confirmations"].pop()
+                    self.assertEqual(validate_simulated_decision({"signals": [row]}, context)["signals"][0]["action"], "watch")
 
     def test_research_grade_changes_require_a_versioned_update(self):
         row,context=fixture();row["assessment"]["research"]["grade"]="strong"

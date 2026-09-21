@@ -75,7 +75,13 @@ def validate(row, stock, context):
         if direction == "support" and path.startswith("fund_flow."):
             flow = stock.get("fund_flow") or {}
             if flow.get("status") != "available" or flow.get("source_date_verified") is not True:
-                raise ValueError("cached, undated or missing fund flow is background, not current independent confirmation")
+                raise ValueError(
+                    f"{stock.get('code', row.get('code'))}: {path}: cached, undated or missing fund flow "
+                    "is background, not current independent confirmation "
+                    f"(status={flow.get('status')!r}, source_date_verified={flow.get('source_date_verified')!r}). "
+                    "Remove this support confirmation and reassess confidence using other verified evidence; "
+                    "changing basis text alone does not fix it."
+                )
         if path in paths:
             raise ValueError("one source_path cannot count as two independent confirmations")
         paths.add(path)

@@ -369,6 +369,7 @@ def _compact_stock(
         "fund_flow": {
             "status": fund_flow.get("status") or ("available" if fund_detail else "unavailable"),
             "freshness": fund_flow.get("freshness"),
+            "source_date_verified": fund_flow.get("source_date_verified") is True,
             "summary": fund_flow.get("summary"),
             "main_net": fund_detail.get("main_net_inflow"),
             "big_net": fund_detail.get("big_net_inflow"),

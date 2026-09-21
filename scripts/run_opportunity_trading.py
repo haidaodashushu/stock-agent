@@ -7,6 +7,7 @@ import fcntl
 import os
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -17,6 +18,32 @@ from data import opportunity_trial as trial
 from data.market_calendar import is_actionable_trading_time
 from data.store.sqlite_store import StockStore
 from data.trading_state import refresh_trading_state
+
+
+def notify_failure(mode, as_of):
+    """Preserve the scheduled trading failure alert when using the trial runner."""
+    if os.environ.get("STOCK_TRADING_DRY_RUN") == "1":
+        return
+    label = "实盘建议" if mode == "live" else "模拟盘操盘"
+    # A failure can happen after an executor has started. Do not claim that no
+    # order exists, and never retry the decision just to produce a report.
+    content = (f"⚠️ {as_of} {label}任务异常\n\n"
+               "本轮未完成有效业务提交，请核对运行日志与建议/成交记录。"
+               "系统不会自动重放旧决策。")
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", suffix=".txt") as alert:
+            alert.write(content)
+            alert.flush()
+            result = subprocess.run(
+                [sys.executable, str(ROOT/"scripts/send_configured_message.py"),
+                 "--file", alert.name, "--message-type", "text",
+                 "--idempotency-key", f"agent_fail_{mode}_{as_of}"], cwd=ROOT, check=False, timeout=60,
+            )
+    except Exception as exc:
+        print(f"trading failure alert failed ({mode}, {as_of}): {type(exc).__name__}", file=sys.stderr)
+        return
+    if result.returncode:
+        print(f"trading failure alert failed ({mode}, {as_of})", file=sys.stderr)
 
 
 def run(mode, event=False):
@@ -37,12 +64,14 @@ def run(mode, event=False):
         if event and not events:
             return 0
         stage=now.strftime("%H%M")
+        as_of=now.strftime("%Y-%m-%d %H:%M:%S")
         try:
             if event:
                 os.environ["STOCK_OPPORTUNITY_FOCUS"]=",".join(dict.fromkeys(r["code"] for r in events))
             else:
                 os.environ.pop("STOCK_OPPORTUNITY_FOCUS",None)
             state=refresh_trading_state(stage,mode)
+            as_of=state["as_of"]
             # Event evidence is attached to the persisted stock dossier; the
             # decision still refreshes and revalidates all actual holdings.
             command=[sys.executable,str(ROOT/"scripts/run_stock_agent.py"),"--task",f"trading-{mode}","--stage",stage]
@@ -56,11 +85,14 @@ def run(mode, event=False):
                 trial.finish_events(store,events,success,"" if success else "agent did not complete this snapshot")
             if success and os.environ.get("STOCK_TRADING_DRY_RUN")!="1":
                 subprocess.run([sys.executable,str(ROOT/"scripts/send_agent_outbox.py")],cwd=ROOT,check=False)
+            if not success:
+                notify_failure(mode, as_of)
             return 0 if success else 1
         except Exception as exc:
             if events:
                 trial.finish_events(store,events,False,str(exc))
             print(f"opportunity trading failed ({mode}): {exc}",file=sys.stderr)
+            notify_failure(mode, as_of)
             return 1
 
 

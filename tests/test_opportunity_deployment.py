@@ -2,7 +2,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+from data.store.sqlite_store import StockStore
 
 from scripts import configure_opportunity_trial as installer
 from scripts import run_opportunity_trading as worker
@@ -56,6 +58,43 @@ class TrialDeploymentTests(unittest.TestCase):
             self.assertEqual(worker.run("live",event=True),0)
             store.assert_not_called()
             execute.assert_not_called()
+
+    def test_missing_submission_alerts_even_when_model_exits_zero(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store = StockStore(str(Path(folder)/"test.db"))
+            with patch.object(worker, "ROOT", Path(folder)), \
+                 patch.object(worker.trial, "enabled", return_value=True), \
+                 patch.object(worker, "is_actionable_trading_time", return_value=True), \
+                 patch.object(worker, "StockStore", return_value=store), \
+                 patch.object(worker, "refresh_trading_state", return_value={"as_of": "2026-09-21 14:32:11"}), \
+                 patch.object(worker.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as execute, \
+                 patch.object(worker, "notify_failure") as notify:
+                self.assertEqual(worker.run("live"), 1)
+                notify.assert_called_once_with("live", "2026-09-21 14:32:11")
+                self.assertEqual(execute.call_count, 1)  # No decision replay or success report.
+
+    def test_failure_alert_preserves_uncertain_execution_and_dry_run_is_silent(self):
+        calls = []
+        def send(command, **kwargs):
+            calls.append((command, Path(command[command.index("--file")+1]).read_text()))
+            return SimpleNamespace(returncode=0)
+        with patch.object(worker.subprocess, "run", side_effect=send), \
+             patch.dict(worker.os.environ, {"STOCK_TRADING_DRY_RUN": "1"}):
+            worker.notify_failure("live", "2026-09-21 14:32:11")
+        self.assertEqual(calls, [])
+        with patch.object(worker.subprocess, "run", side_effect=send), \
+             patch.dict(worker.os.environ, {"STOCK_TRADING_DRY_RUN": "0"}):
+            worker.notify_failure("live", "2026-09-21 14:32:11")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("agent_fail_live_2026-09-21 14:32:11", calls[0][0])
+        self.assertIn("建议/成交记录", calls[0][1])
+        self.assertNotIn("没有执行成交", calls[0][1])
+
+    def test_failure_alert_transport_error_does_not_restart_decision_handling(self):
+        with patch.object(worker.subprocess, "run", side_effect=OSError("unavailable")) as send, \
+             patch.dict(worker.os.environ, {"STOCK_TRADING_DRY_RUN": "0"}):
+            worker.notify_failure("live", "2026-09-21 14:32:11")
+        send.assert_called_once()
 
 
 if __name__=="__main__":
