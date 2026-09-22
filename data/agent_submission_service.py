@@ -50,6 +50,22 @@ def _existing_response(claim: Any) -> dict[str, Any]:
     }
 
 
+def trading_notification(context: dict[str, Any], execution: dict[str, Any]) -> dict[str, Any]:
+    """Silence successful no-action event reviews, using executor receipts.
+
+    A proposed model action is not a fill or a new manual-account intent.
+    Individual execution rejections remain visible even if nothing traded.
+    """
+    if context.get("decision_trigger") != "event":
+        return {"send": True, "reason": "scheduled_review"}
+    rows = execution.get("results") or []
+    if execution.get("error") or execution.get("skipped") or any(row.get("errors") for row in rows):
+        return {"send": True, "reason": "execution_issue"}
+    if any(row.get("executed") or row.get("created_intent") for row in rows):
+        return {"send": True, "reason": "trade_or_new_intent"}
+    return {"send": False, "reason": "event_review_without_action"}
+
+
 def submit_trading_decision(
     *,
     mode: str,
@@ -110,8 +126,11 @@ def submit_trading_decision(
             raise RuntimeError("executor returned no execution receipt")
         if execution.get("error") or execution.get("skipped"):
             raise RuntimeError(str(execution.get("error") or "execution skipped"))
+        notification = ({"send": False, "reason": "dry_run"} if dry_run
+                        else trading_notification(context, execution))
+        result["notification"] = notification
         report = completed.stdout.strip()
-        if mode == "live" and not dry_run:
+        if mode == "live" and notification["send"]:
             fortune_path = run_dir / "fortune.txt"
             fortune = subprocess.run(
                 [
@@ -133,14 +152,14 @@ def submit_trading_decision(
                 from data.trading_assessment import record
                 record(store,mode,validated,context)
         complete_submission(store=store, key=claim.submission_key, result=result, report=report)
-        if not dry_run:
+        if notification["send"]:
             enqueue_message(
                 store=store, submission_key=claim.submission_key,
                 message_type="text", content=report,
             )
         return {
             "status": "submitted", "submission_key": claim.submission_key,
-            "execution": result, "report": report,
+            "execution": result, "report": report, "notification": notification,
         }
     except Exception as exc:
         fail_submission(store=store, key=claim.submission_key, error=str(exc))
