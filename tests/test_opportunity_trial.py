@@ -45,7 +45,7 @@ class OpportunityTrialTests(unittest.TestCase):
 
     def record(self,code="002185",p=None,mode="simulated",now=NOW-timedelta(minutes=30)):
         trial.record_decision(self.store,mode,{"signals" if mode=="simulated" else "decisions":[{
-           "code":code,"action":"watch","watch_plan":p or plan(review_after_minutes=60)}]},
+           "code":code,"action":"watch","watch_plan":p or plan()}]},
            {"as_of":trial.stamp(now),"positions":[]},{"results":[]},now)
 
     def test_missing_next_daily_list_retains_observation_not_buy_permission(self):

@@ -1,5 +1,4 @@
-"""Cheap event eligibility and factual live-intent deduplication; no model/network."""
-from datetime import datetime
+"""Factual live-intent deduplication and numeric helpers; no model/network."""
 import json
 import math
 
@@ -10,42 +9,6 @@ def finite(value):
         return value if value is not None and math.isfinite(value) else None
     except (ValueError, TypeError):
         return None
-
-
-def session_minutes(at):
-    minute = at.hour*60 + at.minute + at.second/60
-    return max(0, min(120, minute-570)) + max(0, min(120, minute-780))
-
-
-def due_change(stored, baseline, quote, now, cfg):
-    """Fail open without a matching decision baseline; unchanged time is not news."""
-    before = baseline.get('quote') or {}
-    old_price, price = finite(before.get('price')), finite(quote.get('price'))
-    if baseline.get('as_of') != stored.get('reviewed_at') or old_price is None or old_price <= 0 or price is None or price <= 0:
-        return {'material':True, 'reason':'comparison_unavailable'}
-    try:
-        at = datetime.fromisoformat(baseline['as_of'])
-    except (KeyError, ValueError):
-        return {'material':True, 'reason':'comparison_unavailable'}
-    if at.date() != now.date():
-        return {'material':True, 'reason':'new_session'}
-    threshold = float(cfg.get('review_price_change_pct', 1.0))
-    change = (price/old_price-1)*100
-    if abs(change) >= threshold:
-        return {'material':True, 'reason':'price_change', 'change_pct':round(change,4)}
-    for field, direction in (('high',1),('low',-1)):
-        previous, current = finite(before.get(field)), finite(quote.get(field))
-        if previous and current and direction*(current/previous-1)*100 >= threshold:
-            return {'material':True, 'reason':'new_' + field}
-    elapsed = session_minutes(now)-session_minutes(at)
-    if elapsed >= 3 and session_minutes(at) >= 5:
-        for field in ('amount','volume'):
-            previous, current = finite(before.get(field)), finite(quote.get(field))
-            if previous and current and current >= previous:
-                pace = (current-previous)/elapsed / (previous/session_minutes(at))
-                if pace >= float(cfg.get('review_activity_ratio', 2.0)):
-                    return {'material':True, 'reason':field+'_pace', 'ratio':round(pace,3)}
-    return {'material':False, 'reason':'unchanged_wait_for_scheduled_review', 'change_pct':round(change,4)}
 
 
 def intent_evidence(stock, context):

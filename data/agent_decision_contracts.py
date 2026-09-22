@@ -164,7 +164,6 @@ def trading_decision_contract(
         "review_below": "positive pullback/review price or null",
         "invalidation_below": "positive original structural risk level or null",
         "invalidation_reason": "required when invalid; distinguish portfolio reduction",
-        "review_after_minutes": "integer 15..240 trading minutes for this stock's plan; default 30; checks for material changes against the last completed decision; unchanged timers wait for scheduled review; missing baseline fails open; no daily quota or account cooldown, subject to session alignment, account lock and batching; new events may trigger earlier; not a guaranteed completion time",
         "requalified": "true only for an explicitly revalidated retained opportunity",
         "requalification_reason": "current route, structure, company evidence and account fit",
     }

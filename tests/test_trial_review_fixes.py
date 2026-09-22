@@ -8,92 +8,94 @@ from unittest.mock import patch
 
 from data import opportunity_trial as trial
 from data.store.sqlite_store import StockStore
-from data.trading_review_policy import due_change, unchanged_intent, account_facts
+from data.trading_review_policy import unchanged_intent, account_facts
 from scripts.execute_live_trade_decision import execute
 from scripts.execute_trading_cycle import validate_simulated_decision, validate_live_decision
 from tests.test_opportunity_trial import NOW, candidate, plan, quote
 from tests.test_trading_assessment import fixture
 
 
-class ReviewGateTests(unittest.TestCase):
-    def gate(self, current=None, baseline=None, now=NOW):
-        at=NOW-timedelta(minutes=15)
-        baseline=baseline or {'as_of':trial.stamp(at), 'quote':{'price':10,'amount':27000,'volume':2700}}
-        return due_change({'reviewed_at':baseline['as_of']}, baseline,
-                          current or {'price':10,'amount':42000,'volume':4200}, now, {})
+class ScheduledAndEventTests(unittest.TestCase):
+    def setUp(self):
+        folder=tempfile.TemporaryDirectory();self.addCleanup(folder.cleanup)
+        self.store=StockStore(str(Path(folder.name)/'test.db'))
+        trial.ensure_tables(self.store)
+        trial.ingest(self.store,[candidate()],NOW)
 
-    def test_timer_alone_does_not_wake_but_price_or_pace_does(self):
-        self.assertFalse(self.gate()['material'])
-        self.assertEqual(self.gate({'price':10.2})['reason'],'price_change')
-        self.assertEqual(self.gate({'price':10,'amount':60000})['reason'],'amount_pace')
-        self.assertEqual(self.gate({'price':10,'volume':6000})['reason'],'volume_pace')
+    def legacy_plan(self, *, mode='simulated', holding=False, minutes=15, at=NOW):
+        # Write the old field directly, as a database retained across deployment.
+        old=plan(review_above=None,invalidation_below=None)
+        old['review_after_minutes']=minutes
+        trial.record_decision(self.store,mode,{'signals' if mode=='simulated' else 'decisions':[
+            {'code':'002185','action':'hold' if holding else 'watch','watch_plan':old}]},
+            {'as_of':trial.stamp(at),'positions':[{'code':'002185'}] if holding else []},{},at)
+        with self.store._get_conn() as conn:
+            conn.execute('UPDATE opportunity_plans SET position_volume=?',(100 if holding else 0,))
 
-    def test_missing_baseline_fails_open_and_new_day_wakes(self):
-        self.assertTrue(due_change({'reviewed_at':'new'}, {}, {'price':10},NOW,{})['material'])
-        self.assertEqual(self.gate(now=NOW+timedelta(days=3))['reason'],'new_session')
+    def test_no_timer_for_candidates_or_holdings_even_without_baseline_or_with_price_change(self):
+        for mode in ('simulated','live'):
+            for holding in (False,True):
+                with self.subTest(mode=mode,holding=holding):
+                    self.legacy_plan(mode=mode,holding=holding)
+                    for minutes,price in ((14,10),(15,10),(30,10.5),(90,11)):
+                        at=NOW+timedelta(minutes=minutes)
+                        trial.observe(self.store,mode,{'002185':quote(price,at)},
+                                      {'002185':100} if holding else {},at)
+                    with self.store._get_conn() as conn:
+                        self.assertEqual(conn.execute('SELECT COUNT(*) FROM opportunity_events').fetchone()[0],0)
 
-    def test_intraday_excursion_and_lunch_adjusted_pace(self):
-        at=NOW.replace(hour=11,minute=25)
-        baseline={'as_of':trial.stamp(at),'quote':{'price':10,'high':10,'low':10,'amount':115000}}
-        self.assertEqual(self.gate({'price':10,'high':10.2},baseline)['reason'],'new_high')
-        self.assertEqual(self.gate({'price':10,'low':9.8},baseline)['reason'],'new_low')
-        self.assertEqual(self.gate({'price':10,'amount':137000},baseline,NOW.replace(hour=13,minute=5))['reason'],'amount_pace')
+    def test_scheduled_scope_ignores_legacy_future_timer_and_keeps_rotation(self):
+        self.legacy_plan(minutes=240)
+        plans=trial.load_plans(self.store,'simulated')
+        self.assertNotIn('next_review_at',plans['002185'])
+        self.assertNotIn('review_after_minutes',plans['002185']['plan'])
+        selected,*_=trial.candidate_scope(self.store,'simulated',[],[],now=NOW+timedelta(minutes=30))
+        self.assertEqual([r['code'] for r in selected],['002185'])
+        trial.ingest(self.store,[candidate(f'00218{i}') for i in range(6)],NOW)
+        selected,*_=trial.candidate_scope(self.store,'simulated',[],[],now=NOW)
+        self.assertEqual(len(selected),3)  # Deep-research capacity and oldest-first remain.
+        self.assertNotIn('002185',[r['code'] for r in selected])
 
-    def test_due_gate_keeps_risk_and_scheduled_candidate_coverage(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store=StockStore(str(Path(tmp)/'test.db'));trial.ensure_tables(store)
-            trial.ingest(store,[candidate()],NOW)
-            at=NOW-timedelta(minutes=20)
-            trial.record_decision(store,'simulated',{'signals':[{'code':'002185','action':'watch',
-                'watch_plan':plan(review_above=None,invalidation_below=9.95,review_after_minutes=15)}]},
-                {'as_of':trial.stamp(at),'positions':[]},{'results':[]},at)
-            trial.write_cache(store,'decision_observation_simulated',{'002185':{'as_of':trial.stamp(at),'quote':quote(10,at)}},at)
-            trial.observe(store,'simulated',{'002185':quote(10)}, {}, NOW)
-            with store._get_conn() as conn:
-                self.assertEqual(conn.execute('SELECT COUNT(*) FROM opportunity_events').fetchone()[0],0)
-                p=conn.execute('SELECT reviewed_at FROM opportunity_plans').fetchone()[0]
-                self.assertEqual(p,trial.stamp(at))  # no fabricated completed review
-            selected,*_=trial.candidate_scope(store,'simulated',[],[],now=NOW)
-            self.assertEqual([r['code'] for r in selected],['002185'])
-            trial.observe(store,'simulated',{'002185':quote(9.94)}, {}, NOW)
-            with store._get_conn() as conn:
-                self.assertEqual([r[0] for r in conn.execute('SELECT kind FROM opportunity_events')],['structure_risk'])
+    def test_old_timer_fields_are_ignored_on_new_submissions(self):
+        for old in (15,240,'legacy value'):
+            self.assertNotIn('review_after_minutes',plan(review_after_minutes=old))
 
-    def test_unchanged_holding_timer_does_not_hide_a_new_risk(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store=StockStore(str(Path(tmp)/'test.db'));trial.ensure_tables(store)
-            at=NOW-timedelta(minutes=20)
-            trial.record_decision(store,'simulated',{'signals':[{'code':'600001','action':'hold',
-                'watch_plan':plan(state='holding',review_above=None,invalidation_below=9.95,review_after_minutes=15)}]},
-                {'as_of':trial.stamp(at),'positions':[{'code':'600001'}]},{'results':[]},at)
-            with store._get_conn() as conn:
-                conn.execute("UPDATE opportunity_plans SET position_volume=100")
-            trial.write_cache(store,'decision_observation_simulated',{'600001':{'as_of':trial.stamp(at),'quote':quote(10,at)}},at)
-            trial.observe(store,'simulated',{'600001':quote(10)}, {'600001':100}, NOW)
-            with store._get_conn() as conn:
-                self.assertEqual(conn.execute('SELECT COUNT(*) FROM opportunity_events').fetchone()[0],0)
-            trial.observe(store,'simulated',{'600001':quote(9.94)}, {'600001':100}, NOW)
-            with store._get_conn() as conn:
-                self.assertEqual([r[0] for r in conn.execute('SELECT kind FROM opportunity_events')],['structure_risk'])
+    def test_price_crossing_and_structure_risk_still_wake_without_timer(self):
+        p=plan(review_above=10.1,invalidation_below=9.5)
+        trial.record_decision(self.store,'simulated',{'signals':[{'code':'002185','action':'watch','watch_plan':p}]},
+                              {'as_of':trial.stamp(NOW),'positions':[]},{},NOW)
+        for price,kind in ((10.2,'price_recovery'),(9.4,'structure_risk')):
+            at=NOW+timedelta(minutes=3)
+            trial.observe(self.store,'simulated',{'002185':quote(price,at)}, {},at)
+            rows=trial.claim_events(self.store,'simulated',at)
+            self.assertEqual([r['kind'] for r in rows],[kind])
+            trial.finish_events(self.store,rows,True)
 
-    def test_pending_timer_is_rechecked_before_claim_and_can_revive(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            store=StockStore(str(Path(tmp)/'test.db'));trial.ensure_tables(store)
-            trial.ingest(store,[candidate()],NOW)
-            at=NOW-timedelta(minutes=20)
-            trial.record_decision(store,'simulated',{'signals':[{'code':'002185','action':'watch',
-                'watch_plan':plan(review_above=None,invalidation_below=None,review_after_minutes=15)}]},
-                {'as_of':trial.stamp(at),'positions':[]},{'results':[]},at)
-            stored=trial.load_plans(store,'simulated')['002185']
-            with store._get_conn() as conn:
-                trial.queue_event(conn,'simulated','002185',stored['setup_id'],'review_due',trial.stamp(at),{'reviewed_at':trial.stamp(at)},NOW)
-            trial.write_cache(store,'decision_observation_simulated',{'002185':{'as_of':trial.stamp(at),'quote':quote(10,at)}},at)
-            trial.write_cache(store,'monitor_quote',{'002185':quote(10)},NOW)
-            self.assertEqual(trial.claim_events(store,'simulated',NOW),[])
-            later=NOW+timedelta(minutes=3)
-            trial.write_cache(store,'monitor_quote',{'002185':quote(10.2,later)},later)
-            trial.observe(store,'simulated',{'002185':quote(10.2,later)}, {}, later)
-            self.assertEqual([r['kind'] for r in trial.claim_events(store,'simulated',later)],['review_due'])
+    def test_pending_legacy_timers_expire_without_blocking_new_events(self):
+        self.legacy_plan()
+        with self.store._get_conn() as conn:
+            for mode in ('simulated','live'):
+                for kind in ('review_due','holding_review_due'):
+                    trial.queue_event(conn,mode,'002185','legacy',kind,'old',{},NOW)
+                trial.queue_event(conn,mode,'002185','legacy','news_changed','new',{},NOW)
+        for mode in ('simulated','live'):
+            rows=trial.claim_events(self.store,mode,NOW)
+            self.assertEqual([r['kind'] for r in rows],['news_changed'])
+        with self.store._get_conn() as conn:
+            rows=conn.execute("SELECT status,error FROM opportunity_events WHERE kind IN ('review_due','holding_review_due')").fetchall()
+            self.assertEqual([(r[0],r[1]) for r in rows],[('expired','timer trigger retired')]*4)
+
+    def test_actual_holdings_events_do_not_consume_candidate_slots(self):
+        codes=[f'00218{i}' for i in range(5)]
+        trial.ingest(self.store,[candidate(c) for c in codes],NOW)
+        with self.store._get_conn() as conn:
+            for code in codes:
+                trial.queue_event(conn,'live',code,'fixture','news_changed','new',{},NOW)
+        config=trial.settings()|{'event_batch_size':1}
+        with patch.object(trial,'settings',return_value=config), \
+             patch('data.live_manual_account.account_snapshot',return_value={'positions':[{'code':c} for c in codes[:4]]}):
+            rows=trial.claim_events(self.store,'live',NOW)
+        self.assertEqual({r['code'] for r in rows},set(codes))
 
 
 class AssessmentFixTests(unittest.TestCase):

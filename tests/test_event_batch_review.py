@@ -79,9 +79,9 @@ class EventBatchReviewTests(unittest.TestCase):
 
     def test_plan_revision_does_not_repeat_acknowledged_price_but_new_crossing_can_wake(self):
         trial.ingest(self.store, [candidate()], NOW)
-        self.record_plan(plan(review_after_minutes=60), NOW-timedelta(minutes=5))
+        self.record_plan(plan(), NOW-timedelta(minutes=5))
         trial.observe(self.store, 'simulated', {'002185':quote(16.3)}, {}, NOW)
-        self.record_plan(plan(review_above=16.1, review_after_minutes=60), NOW, 16.3)
+        self.record_plan(plan(review_above=16.1), NOW, 16.3)
         later = NOW+timedelta(minutes=3)
         trial.observe(self.store, 'simulated', {'002185':quote(16.4,later)}, {}, later)
         self.assertEqual(trial.claim_events(self.store, 'simulated', later), [])
@@ -93,10 +93,10 @@ class EventBatchReviewTests(unittest.TestCase):
 
     def test_pending_price_from_superseded_plan_is_not_executed(self):
         trial.ingest(self.store, [candidate()], NOW)
-        self.record_plan(plan(review_after_minutes=60), NOW-timedelta(minutes=5))
+        self.record_plan(plan(), NOW-timedelta(minutes=5))
         trial.observe(self.store, 'simulated', {'002185':quote(16.3)}, {}, NOW)
         # Completion uses an earlier snapshot: the old event arrived in flight.
-        self.record_plan(plan(review_above=17,review_after_minutes=60), NOW-timedelta(minutes=1))
+        self.record_plan(plan(review_above=17), NOW-timedelta(minutes=1))
         self.assertEqual(trial.claim_events(self.store, 'simulated', NOW), [])
         with self.store._get_conn() as conn:
             self.assertEqual(conn.execute('SELECT error FROM opportunity_events').fetchone()[0], 'price plan superseded')

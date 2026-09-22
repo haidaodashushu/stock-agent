@@ -193,7 +193,7 @@ class StockResearchTests(unittest.TestCase):
                     VALUES('simulated','002189','history','new_opportunity',?,'{}',?,'done',?)""",
                     (f"prior-{i}",at,f"simulated:{at}"))
         trial.record_decision(self.store, "simulated", {"signals":[{
-            "code":"002185", "action":"watch", "watch_plan":plan(review_after_minutes=60)}]},
+            "code":"002185", "action":"watch", "watch_plan":plan()}]},
             {"as_of":trial.stamp(NOW-timedelta(minutes=5)), "positions":[]}, {}, NOW-timedelta(minutes=5))
         trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
         first=trial.claim_events(self.store,"simulated",NOW)

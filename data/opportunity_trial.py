@@ -150,34 +150,9 @@ def load_plans(store, mode):
         result = {r["code"]: {**dict(r), "plan": obj(r["plan"])} for r in
                   conn.execute("SELECT * FROM opportunity_plans WHERE mode=?", (mode,))}
     for row in result.values():
-        row["next_review_at"] = next_review_at(row["reviewed_at"], row["plan"].get("review_after_minutes", 30))
+        # Legacy plans remain readable, but model-selected timers are retired.
+        row["plan"].pop("review_after_minutes", None)
     return result
-
-
-def next_review_at(reviewed_at, minutes):
-    """Add trading minutes, then align to a time the event worker can start."""
-    current = datetime.fromisoformat(reviewed_at)
-    remaining = timedelta(minutes=minutes)
-    for _ in range(370):
-        if market_day(current).is_open:
-            for h1, m1, h2, m2 in ((9,30,11,30), (13,0,15,0)):
-                start = current.replace(hour=h1, minute=m1, second=0, microsecond=0)
-                end = current.replace(hour=h2, minute=m2, second=0, microsecond=0)
-                if current >= end:
-                    continue
-                current = max(current, start)
-                if remaining < end-current:
-                    due = current + remaining
-                    # Existing workers stop opening event runs five minutes
-                    # before session end, allowing models time to finish.
-                    if due < end-timedelta(minutes=5):
-                        return stamp(due)
-                    current, remaining = end, timedelta(0)
-                else:
-                    remaining -= end-current
-                    current = end
-        current = (current+timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    raise ValueError("no review trading session within one year")
 
 
 def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=None):
@@ -199,9 +174,6 @@ def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=N
             continue
         if focus_codes is not None and code not in focus_codes:
             continue
-        if focus_codes is None and plan.get("reviewed_at") and plan.get("setup_id") == setup["setup_id"]:
-            if stamp(now) < plan["next_review_at"]:
-                continue
         eligible.append(code)
     # Least recently researched first; never discard an overflow candidate.
     eligible.sort(key=lambda c: (plans.get(c, {}).get("reviewed_at", ""),
@@ -241,10 +213,7 @@ def validate_plan(raw):
             "invalidation_reason": str(raw.get("invalidation_reason") or "")[:240],
             "requalification_reason": str(raw.get("requalification_reason") or "")[:300],
             "requalified": raw.get("requalified") is True}
-    minutes = raw.get("review_after_minutes", 30)
-    if isinstance(minutes, bool) or not isinstance(minutes, int) or not 15 <= minutes <= 240:
-        raise ValueError("watch_plan.review_after_minutes must be an integer between 15 and 240")
-    plan["review_after_minutes"] = minutes
+    # Ignore retired review_after_minutes in older submissions.
     for field in ("review_above", "review_below", "invalidation_below"):
         value = raw.get(field)
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int,float)) or not math.isfinite(value) or value <= 0):
@@ -339,17 +308,6 @@ def observe(store, mode, quotes, positions, now=None):
             price = float(q["price"])
             payload = {"quote": q, "previous_quote": old_quotes.get(code), "plan": plan}
             version = stored.get("version", "initial")
-            due = stored.get("next_review_at")
-            if plan and due and stamp(now) >= due:
-                kind = "holding_review_due" if code in positions else "review_due"
-                from data.trading_review_policy import due_change
-                eligibility = due_change(stored, acknowledged.get(code, {}), q, now, settings())
-                if eligibility["material"]:
-                    queue_event(conn, mode, code, setup_id, kind, stored["reviewed_at"],
-                                {**payload, "due_at": due, "reviewed_at": stored["reviewed_at"],
-                                 "eligibility": eligibility}, now)
-                conn.execute("INSERT OR REPLACE INTO opportunity_cache VALUES(?,?,?,?)",
-                             (f"review_gate_{mode}", code, encode({"reviewed_at":stored["reviewed_at"], **eligibility}), stamp(now)))
             if not plan:
                 kind = "new_opportunity" if setup.get("first_seen") == str(now.date()) else "research_due"
                 queue_event(conn, mode, code, setup_id, kind, version, payload, now)
@@ -364,7 +322,7 @@ def observe(store, mode, quotes, positions, now=None):
                     # A revised plan can still describe a condition the model
                     # already saw. Do not treat that sustained state as a new
                     # crossing merely because the plan hash changed. A fresh
-                    # observed crossing, timer, news or fast drop can wake it.
+                    # observed crossing, news or fast drop can wake it.
                     seen = acknowledged.get(code, {})
                     seen_quote = seen.get("quote", {})
                     old_quote = old_quotes.get(code, {})
@@ -433,7 +391,7 @@ def claim_events(store, mode, now=None):
     setups = load_setups(store, now)
     with store._get_conn() as conn:
         queued_codes = [r[0] for r in conn.execute(
-            "SELECT DISTINCT code FROM opportunity_events WHERE mode=? AND status='pending'", (mode,))]
+            "SELECT DISTINCT code FROM opportunity_events WHERE mode=? AND status='pending' AND kind NOT IN ('review_due','holding_review_due')", (mode,))]
         if mode == "simulated":
             holdings = {r[0] for r in conn.execute("SELECT code FROM portfolio WHERE volume>0")}
         else:
@@ -441,8 +399,6 @@ def claim_events(store, mode, now=None):
             holdings = {r["code"] for r in account_snapshot(conn, quotes={}, expire_pending=False)["positions"]}
     from data.stock_research import contexts
     research = contexts(store, queued_codes, setups, now)
-    acknowledged = read_cache(store, f"decision_observation_{mode}", queued_codes, 86400, now)
-    quotes = read_cache(store, "monitor_quote", queued_codes, cfg["quote_max_age_seconds"], now)
     with store._get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # Uncertain interrupted execution is never automatically replayed.
@@ -452,33 +408,22 @@ def claim_events(store, mode, now=None):
                      (stamp(now),stamp(now-timedelta(minutes=cfg["event_max_age_minutes"]))))
         conn.execute("UPDATE opportunity_events SET status='expired',finished_at=? WHERE status='pending' AND created_at<?",
                      (stamp(now),str(now.date())))
-        # A slow completed decision can supersede a timer queued during the
-        # model call. Discard that old timer instead of immediately re-running.
-        for row in conn.execute("SELECT id,code,payload FROM opportunity_events WHERE mode=? AND status='pending' AND kind IN ('review_due','holding_review_due')", (mode,)).fetchall():
-            plan = conn.execute("SELECT reviewed_at FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
-            if not plan or plan["reviewed_at"] != obj(row["payload"]).get("reviewed_at"):
-                conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='review superseded' WHERE id=?", (stamp(now),row["id"]))
-            elif valid_quote(quotes.get(row["code"], {}), now, cfg["quote_max_age_seconds"]):
-                from data.trading_review_policy import due_change
-                gate = due_change(dict(plan), acknowledged.get(row["code"], {}), quotes[row["code"]], now, cfg)
-                if not gate["material"]:
-                    conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error=? WHERE id=?",
-                                 (stamp(now),gate["reason"],row["id"]))
+        # Retire pending timers from older versions; keep their audit history.
+        # Processing/uncertain executions retain the existing lease handling.
+        conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='timer trigger retired' WHERE mode=? AND status='pending' AND kind IN ('review_due','holding_review_due')",
+                     (stamp(now),mode))
         for row in conn.execute("SELECT id,code,dedup FROM opportunity_events WHERE mode=? AND status='pending' AND kind IN ('price_recovery','price_pullback','structure_risk')", (mode,)).fetchall():
             plan = conn.execute("SELECT version FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
             if plan and row["dedup"].rsplit(":", 1)[-1] != plan["version"]:
                 conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='price plan superseded' WHERE id=?", (stamp(now),row["id"]))
-        # Each event carries its own eligibility (a changed condition or a due
-        # plan). No additional account-wide quota or cooldown delays it. The
+        # Each event represents a changed condition. No additional account-wide
+        # quota or cooldown delays it. The
         # worker holds the account lock before claiming and refreshing facts.
-        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='holding_review_due' THEN 1 WHEN kind='new_opportunity' THEN 2 WHEN kind='review_due' THEN 3 ELSE 4 END,created_at,id",(mode,)).fetchall()
+        rows = conn.execute("SELECT * FROM opportunity_events WHERE mode=? AND status='pending' ORDER BY CASE WHEN kind IN ('structure_risk','holding_fast_drop','logic_risk') THEN 0 WHEN kind='new_opportunity' THEN 1 ELSE 2 END,created_at,id",(mode,)).fetchall()
         # Expire last-session observations. Fresh observations can generate
         # today's event; old events never authorize a fresh account action.
         rows = [r for r in rows if r["created_at"][:10] == str(now.date())]
-        # Every decision already reviews all actual holdings. Coalesce their
-        # timers into that single account review; they must not consume all
-        # candidate slots and starve due candidates on every 15-minute tick.
-        holdings.update(r["code"] for r in rows if r["kind"] == "holding_review_due")
+        # Actual holdings' events do not consume candidate research slots.
         # Ordinary missing/expired research is handled by scheduled research
         # slots; it must not by itself launch another full account decision.
         actionable = [r for r in rows if r["kind"] != "research_due"]
