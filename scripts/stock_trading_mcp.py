@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -48,32 +49,37 @@ mcp = FastMCP(
 )
 
 
-@mcp.tool()
-def trading_overview() -> dict:
+def wire(value: dict) -> str:
+    # FastMCP otherwise pretty-prints dicts; models need values, not indentation.
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+@mcp.tool(structured_output=False)
+def trading_overview() -> str:
     """Get this account, market, and complete in-scope universe. Call first."""
-    return get_trading_overview(MODE)
+    return wire(get_trading_overview(MODE))
 
 
-@mcp.tool()
-def stock_evidence(codes: list[str], as_of: str, include_research_details: bool = False) -> dict:
-    """Get current data plus reusable research; request research details only when revising it."""
-    return get_stock_evidence(codes, as_of, MODE, include_research_details)
+@mcp.tool(structured_output=False)
+def stock_evidence(codes: list[str], as_of: str, include_research_details: bool = False, view: str = "brief") -> str:
+    """Read all required codes with brief. Use full for missing thesis details; financials returns only financial detail. Same as_of required."""
+    return wire(get_stock_evidence(codes, as_of, MODE, include_research_details, view))
 
 
-@mcp.tool()
-def recent_trading_activity(as_of: str, limit: int = 10) -> dict:
+@mcp.tool(structured_output=False)
+def recent_trading_activity(as_of: str, limit: int = 10) -> str:
     """Get only this account's recent activity for the same as_of version."""
-    return get_recent_trading_activity(as_of, MODE, limit)
+    return wire(get_recent_trading_activity(as_of, MODE, limit))
 
 
-@mcp.tool()
-def submit_trading_decision(as_of: str, decision: dict) -> dict:
+@mcp.tool(structured_output=False)
+def submit_trading_decision(as_of: str, decision: dict) -> str:
     """Validate and submit this snapshot's complete decision for guarded execution."""
-    return submit_decision(
+    return wire(submit_decision(
         mode=MODE, stage=STAGE, as_of=as_of, decision=decision,
         run_dir=RUN_DIR, provider=args.provider, model=args.model,
         prompt_version=args.prompt_version, dry_run=args.dry_run,
-    )
+    ))
 
 
 if __name__ == "__main__":

@@ -548,8 +548,11 @@ def get_trading_overview(mode: TradingMode) -> dict[str, Any]:
 
 def get_stock_evidence(
     codes: list[str], as_of: str, mode: TradingMode, include_research_details: bool = False,
+    view: str = "brief",
 ) -> dict[str, Any]:
     """Return detailed evidence projected for exactly one account mode."""
+    if view not in {"brief", "full", "financials"}:
+        raise ValueError("view must be brief, full or financials")
     normalized = list(dict.fromkeys(str(code).strip().zfill(6) for code in codes if str(code).strip()))
     if not normalized:
         raise ValueError("codes must not be empty")
@@ -572,12 +575,24 @@ def get_stock_evidence(
                 str(by_code[code]["updated_at"]),
                 previous_decision=previous_by_code.get(code),
                 entry_thesis=entry_by_code.get(code),
-                include_research_details=include_research_details,
+                include_research_details=include_research_details or view in {"full", "financials"},
             ),
             mode,
         )
         for code in normalized
     ]
+    from data.trading_compact import brief_stock, reuse_offer
+    if view == "financials":
+        evidence = [{"code":stock["code"], "name":stock.get("name"),
+                     "selection":{"fundamental":stock["selection"].get("fundamental")},
+                     "research":{k:(stock.get("research") or {}).get(k) for k in
+                                 ("status","revision","facts_version","financial_period")}}
+                    for stock in evidence]
+    elif view == "brief" and not include_research_details:
+        evidence = [brief_stock(stock, mode, current_as_of) for stock in evidence]
+    else:
+        # Legacy include_research_details=true remains a full-view request.
+        evidence = [stock | {"review_reuse":reuse_offer(stock,mode,current_as_of)} for stock in evidence]
     return {
         "schema": f"stock_{mode}_evidence.v1",
         "mode": mode,
@@ -628,12 +643,14 @@ def build_execution_context(
     """Rebuild one executor's context from its account-specific DB version."""
     with _connect() as conn:
         market, rows, as_of = _snapshot(conn, mode, expected_as_of)
+        previous_by_code, _ = _previous_decision_context(conn, mode, as_of)
     stage = str(market.get("stage") or "")
     if expected_stage and stage != expected_stage:
         raise ValueError(f"trading stage changed: requested {expected_stage}, current {stage}")
     compact = [
         _mode_stock(
-            _compact_stock(_object(row["payload"]), str(row["updated_at"]), include_research_details=True), mode,
+            _compact_stock(_object(row["payload"]), str(row["updated_at"]),
+                           previous_decision=previous_by_code.get(str(_object(row["payload"]).get("code") or "").zfill(6)), include_research_details=True), mode,
         )
         for row in rows
     ]

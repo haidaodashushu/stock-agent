@@ -240,6 +240,8 @@ def _validate_trial_rows(rows: list[dict], context: dict) -> None:
     facts = {r["code"]:r for r in context["positions"]+context["candidates"]}
     for row in rows:
         try:
+            from data.trading_compact import expand_review
+            expand_review(row, facts[row["code"]], context)
             row["watch_plan"] = validate_plan(row.get("watch_plan"))
             research = facts[row["code"]].get("research") or {}
             needs_research = research.get("status") != "ready" and row["action"] not in {"sell","reduce","clear"}

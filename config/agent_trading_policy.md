@@ -37,7 +37,7 @@
 
 ## 持续机会试运行
 
-当 overview.refresh.opportunity_trial=true 时，每行提交 watch_plan，遵循 decision_contract。
+当 overview.refresh.opportunity_trial=true 时，每行遵循 decision_contract：未变化的hold/watch可使用短格式，其余提交完整watch_plan。
 读取 opportunity.previous_plan 与原始机会档案，保留尚未证伪的原论据和结构失效位置；变更条件须在 wait_reason 说明新证据。
 review_above/review_below 是程序唤醒条件，不是自动买卖指令；价格必须来自本轮可核验的结构，不得为填字段编造。
 没有可靠价格条件时填 null，明确缺什么证据，等待下一轮定时操盘或新的有效事件。
@@ -60,7 +60,9 @@ watch_plan 是本账户的交易计划；不得把模拟盘仓位、实盘权限
 research.status=ready 时，先复用其结论，再比较当轮日线结构、分钟量价、市场板块、新闻与账户变化。
 changes_since_last_decision 用本账户上次完成的决策作为比较基准；available=false或变化值为null时不能补造。
 原逻辑未变时简要说明新增变化与动作，不重新展开整套公司研究，也不为更新档案而重复提交 research_update。
-需要核验财务原始字段时，对相关股票调用 stock_evidence(include_research_details=true)，沿用同一 as_of。
+默认stock_evidence(view="brief")保留核心研究论据、完整风险与更新条件、当前量价和账户信息；公司/趋势详细讨论、重复选股理由与历史说明可按需读取。
+需要核验财务原始字段时，只对相关股票调用stock_evidence(view="financials")；需要公司/趋势详细讨论或被省略的依据时调用view="full"，沿用同一as_of。
+缺省省略的字段不是0或不存在；不得引用没有读取的证据。新买/加仓若核心公司依据不足，必须补读相关详情后再判断。
 research.status=refresh_required 表示新建研究、证据变化、研究到期或数据待补；提交 research_update 并引用本轮 facts_version。
 已有研究也可能被当前市场结构证伪：此时即使 status=ready，也应更新研究，不能机械执行旧结论。
 研究内容用事实、报告期、推断及缺失信息说明公司逻辑、历史趋势、风险和重做研究的条件；不能用本轮分钟上涨替代公司研究。
@@ -72,7 +74,7 @@ research.status=refresh_required 表示新建研究、证据变化、研究到�
 
 ## 四维评价与置信度依据
 
-当 overview.refresh.decision_assessment_required=true 时，按contract对每行提交assessment，四个维度各用一句证据理由。
+当 overview.refresh.decision_assessment_required=true 时，每行作出当轮四维判断。完整行按contract提交assessment；符合短格式条件的行显式确认四个等级，由程序展开完整记录。
 不计算加权总分，不将选股分数再当作独立确认，不把strong转换为获利概率。没有证据时标unknown/insufficient，不能当作0分或负面事实。
 
 - research：strong为公司与历史结构有充分支持、主要反证已检查；moderate为核心逻辑有支持但存在明确缺口；
@@ -115,3 +117,14 @@ market.regime只是指数快照背景。classification_usable=false时neutral为
 实盘建议到期本身不是新的买卖理由。同日、同方向、同数量且价格变化不足1%，账户事实、研究及新事件未变化时，
 程序复用已有建议记录，不再生成或通知同一建议。实际成交、反向动作、新交易日、数量/账户/研究变化或新的有效事件可重新评估。
 不要通过改写理由制造新建议；原有待执行建议冲突、仓位和可卖量等校验仍适用。
+
+
+## 未变化结论的短格式
+
+只在stock.review_reuse.available=true且本轮确认原计划和四维等级均未变时，hold/watch优先提交：
+{"code":"股票代码","action":"hold或watch","confidence":"medium","reason":"本轮变化与风险已检查、维持计划的具体理由","risk":"当前关键风险","reuse_plan":"本快照review_reuse.ref","review_grades":{"research":"原等级","timing":"原等级","evidence":"原等级","portfolio":"原等级"}}
+仍须逐只检查全部required_evidence_codes，持仓用hold、非持仓用watch；不能省略股票、默认无风险或只复制上次结论。
+reason/risk各用一句具体的话（分别不超过180/150字符），不要反复复述公司历史。不要同时提交watch_plan、assessment或research_update。
+程序验证账户、股票、快照、研究版本和计划引用，复用原计划并用本轮reason更新等待原因；不继承过去的交易动作或证据确认。
+买卖动作、研究更新、计划/评级变化、新事件或review_reuse不可用时提交完整行；强行套用短格式会被拒绝。
+完整行的理由也应简洁，只说明支持本次动作的事实与反证。无必要时不输出多轮进度解说；读取、判断后直接提交，最后简述结果。

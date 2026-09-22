@@ -155,8 +155,17 @@ def trading_decision_contract(
         "reason": "evidence-based decision reason",
         "risk": "key risk",
     }
+    row_shape["compact_unchanged_alternative"] = {
+        "when":"opportunity trial and assessment enabled; stock.review_reuse.available=true; explicit hold/watch only; no trade, new research, new risk/event, changed grades or changed plan",
+        "shape":{"code":"required code", "action":"hold for holding, watch for candidate",
+                 "confidence":"current confidence", "reason":"1..180 chars: this round's change/risk check and why keep plan; normally one sentence",
+                 "risk":"1..150 chars: current key risk", "reuse_plan":"exact stock.review_reuse.ref",
+                 "review_grades":"explicitly reconfirm all four stock.review_reuse.grades; changed grades require full row"},
+        "omit":"watch_plan, assessment, research_update, position_plan, exit_plan; server reconstructs the plan and current assessment, then runs normal validators",
+        "full_rows":"all buy/sell/add/reduce/clear, plan/grade changes and unavailable reuse use the full shape below; never inherit a previous action or confirmations",
+    }
     row_shape["watch_plan"] = {
-        "required_when": "overview.refresh.opportunity_trial=true",
+        "required_when": "overview.refresh.opportunity_trial=true and not using compact_unchanged_alternative",
         "state": "watch|account_blocked|data_pending|invalid|holding; account_blocked requires portfolio.grade=blocked; conditional on a non-trading row is conservatively normalized to blocked with an audit record",
         "thesis": "durable original thesis, preserve unless new evidence changes it",
         "wait_reason": "why hold/wait/act now and what would change the decision",
@@ -179,7 +188,7 @@ def trading_decision_contract(
     }
     from data.trading_assessment import GRADES, FAMILY_PATHS
     row_shape["assessment"] = {
-        "required_when":"overview.refresh.decision_assessment_required=true",
+        "required_when":"overview.refresh.decision_assessment_required=true and not using compact_unchanged_alternative",
         **{key:{"grade":"|".join(values),"reason":"1..240 characters; evidence and missing facts"} for key,values in GRADES.items()},
         "route_reason":"1..240 characters; use this entry route's confirmation and invalidation logic",
         "confidence_reason":"1..240 characters; certainty of this action, not probability of profit",
