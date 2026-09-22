@@ -79,10 +79,12 @@ def run(mode, event=False):
                 command.append("--dry-run")
             result=subprocess.run(command,cwd=ROOT,check=False)
             with store._get_conn() as conn:
-                submission=conn.execute("SELECT status FROM agent_decision_submissions WHERE task='trading' AND mode=? AND as_of=?",(mode,state["as_of"])).fetchone()
+                submission=conn.execute("SELECT status,decision FROM agent_decision_submissions WHERE task='trading' AND mode=? AND as_of=?",(mode,state["as_of"])).fetchone()
             success=result.returncode==0 and submission is not None and submission["status"]=="ready"
             if events:
-                trial.finish_events(store,events,success,"" if success else "agent did not complete this snapshot")
+                decision = trial.obj(submission["decision"]) if success else {}
+                reviewed = {r["code"] for r in decision.get("signals" if mode == "simulated" else "decisions", [])}
+                trial.finish_events(store,events,success,"" if success else "agent did not complete this snapshot", reviewed_codes=reviewed)
             if success and os.environ.get("STOCK_TRADING_DRY_RUN")!="1":
                 subprocess.run([sys.executable,str(ROOT/"scripts/send_agent_outbox.py")],cwd=ROOT,check=False)
             if not success:

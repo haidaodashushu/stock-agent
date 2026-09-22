@@ -574,11 +574,27 @@ def render_report(
     icon = "📈" if mode == "simulated" else "🛡️"
     market_view = decision.get("market_view") if isinstance(decision.get("market_view"), dict) else {}
     stock_names = _stock_name_map(context, decision)
+    event_review = context.get("decision_trigger") == "event"
+    review_label = "事件复核" if event_review else "定时操盘"
     lines = [
-        f"{icon} **{display_stage} {label}半小时操盘**",
+        f"{icon} **{display_stage} {label}{review_label}**",
         "",
         f"**判断**：{_render_stock_references(market_view.get('summary') or '本轮决策不可用', stock_names)}",
     ]
+    if event_review:
+        event_names = {"new_opportunity":"新机会", "review_due":"候选到期复核",
+                       "holding_review_due":"持仓到期复核", "price_recovery":"价格走强",
+                       "price_pullback":"价格回落", "structure_risk":"结构风险",
+                       "holding_fast_drop":"持仓快速下跌", "logic_risk":"重要负面消息",
+                       "news_changed":"新消息", "research_changed":"研究事实变化",
+                       "position_changed":"持仓变化", "account_review":"账户条件变化"}
+        reasons = {}
+        for stock in context.get("positions", []) + context.get("candidates", []):
+            for event in stock.get("opportunity", {}).get("events", []):
+                kind = event.get("kind", "")
+                reasons.setdefault(event_names.get(kind, "其他事件"), set()).add(stock["code"])
+        trigger = "；".join(f"{name} {len(codes)}只" for name,codes in reasons.items()) or "候选或持仓事件"
+        lines.extend(["", f"**触发原因**：{trigger}。同一股票可能包含多个原因。"])
     account = result.get("account") if isinstance(result.get("account"), dict) else {}
     if not account:
         account = context.get("account") if isinstance(context.get("account"), dict) else {}

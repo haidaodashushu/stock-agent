@@ -651,6 +651,7 @@ def build_execution_context(
         "positions": positions,
         "candidates": candidates,
         "opportunity_trial": bool(_object(market.get("refresh")).get("opportunity_trial")),
+        "decision_trigger": "event" if _object(market.get("refresh")).get("focus_codes") else "scheduled_review",
         "decision_assessment_required": bool(_object(market.get("refresh")).get("decision_assessment_required")),
         "required_evidence_codes": [row["code"] for row in [*positions, *candidates]],
     }

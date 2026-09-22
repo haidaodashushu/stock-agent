@@ -210,11 +210,12 @@ def candidate_scope(store, mode, current, holding_codes, focus_codes=None, now=N
     deep_count = 0
     for code in eligible:
         deep = research[code]["status"] != "ready"
-        if focus_codes is None and deep and deep_count >= settings()["deep_research_candidate_batch_size"]:
+        if deep and deep_count >= settings()["deep_research_candidate_batch_size"]:
             continue
         selected.append(code)
         deep_count += int(deep)
-        if focus_codes is None and len(selected) >= settings()["candidate_batch_size"]:
+        limit = settings()["event_batch_size" if focus_codes is not None else "candidate_batch_size"]
+        if len(selected) >= limit:
             break
     result = []
     for code in selected:
@@ -316,6 +317,7 @@ def observe(store, mode, quotes, positions, now=None):
     plans = load_plans(store, mode)
     old_quotes = read_cache(store, "monitor_quote", list(quotes), 3600, now)
     prior_account = read_cache(store, "monitor_account", [mode], 86400, now).get(mode)
+    acknowledged = read_cache(store, f"decision_observation_{mode}", list(quotes), 86400, now)
     from data.stock_research import contexts
     research = contexts(store, list(set(setups)|set(positions)), setups, now)
     with store._get_conn() as conn:
@@ -353,6 +355,22 @@ def observe(store, mode, quotes, positions, now=None):
                                            ("invalidation_below","structure_risk",-1)):
                 level = plan.get(field)
                 if level and (price >= level if direction > 0 else price <= level):
+                    # A revised plan can still describe a condition the model
+                    # already saw. Do not treat that sustained state as a new
+                    # crossing merely because the plan hash changed. A fresh
+                    # observed crossing, timer, news or fast drop can wake it.
+                    seen = acknowledged.get(code, {})
+                    seen_quote = seen.get("quote", {})
+                    old_quote = old_quotes.get(code, {})
+                    crossed = (valid_quote(old_quote, now, 600) and
+                               (float(old_quote["price"]) < level if direction > 0
+                                else float(old_quote["price"]) > level))
+                    already_seen = (seen.get("as_of", "") == stored.get("reviewed_at") and
+                                    valid_quote(seen_quote, now, 86400) and
+                                    (float(seen_quote["price"]) >= level if direction > 0
+                                     else float(seen_quote["price"]) <= level))
+                    if already_seen and not crossed:
+                        continue
                     queue_event(conn,mode,code,setup_id,kind,version,payload,now)
             if plan and stored.get("reviewed_at"):
                 news = conn.execute("""SELECT title,content,risk_level,score,created_at,url FROM news_events
@@ -403,6 +421,20 @@ def claim_events(store, mode, now=None):
     now = now or datetime.now()
     ensure_tables(store)
     cfg = settings()
+    # Resolve local research before the write transaction: contexts may create
+    # its own tables and must never open a second writer while this one holds
+    # BEGIN IMMEDIATE. No market/financial API requests occur here.
+    setups = load_setups(store, now)
+    with store._get_conn() as conn:
+        queued_codes = [r[0] for r in conn.execute(
+            "SELECT DISTINCT code FROM opportunity_events WHERE mode=? AND status='pending'", (mode,))]
+        if mode == "simulated":
+            holdings = {r[0] for r in conn.execute("SELECT code FROM portfolio WHERE volume>0")}
+        else:
+            from data.live_manual_account import account_snapshot
+            holdings = {r["code"] for r in account_snapshot(conn, quotes={}, expire_pending=False)["positions"]}
+    from data.stock_research import contexts
+    research = contexts(store, queued_codes, setups, now)
     with store._get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # Uncertain interrupted execution is never automatically replayed.
@@ -418,6 +450,10 @@ def claim_events(store, mode, now=None):
             plan = conn.execute("SELECT reviewed_at FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
             if not plan or plan["reviewed_at"] != obj(row["payload"]).get("reviewed_at"):
                 conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='review superseded' WHERE id=?", (stamp(now),row["id"]))
+        for row in conn.execute("SELECT id,code,dedup FROM opportunity_events WHERE mode=? AND status='pending' AND kind IN ('price_recovery','price_pullback','structure_risk')", (mode,)).fetchall():
+            plan = conn.execute("SELECT version FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
+            if plan and row["dedup"].rsplit(":", 1)[-1] != plan["version"]:
+                conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='price plan superseded' WHERE id=?", (stamp(now),row["id"]))
         # Each event carries its own eligibility (a changed condition or a due
         # plan). No additional account-wide quota or cooldown delays it. The
         # worker holds the account lock before claiming and refreshing facts.
@@ -428,8 +464,21 @@ def claim_events(store, mode, now=None):
         # Every decision already reviews all actual holdings. Coalesce their
         # timers into that single account review; they must not consume all
         # candidate slots and starve due candidates on every 15-minute tick.
-        holding_due = list(dict.fromkeys(r["code"] for r in rows if r["kind"] == "holding_review_due"))
-        codes = holding_due + list(dict.fromkeys(r["code"] for r in rows if r["code"] not in holding_due))[:cfg["event_batch_size"]]
+        holdings.update(r["code"] for r in rows if r["kind"] == "holding_review_due")
+        # Ordinary missing/expired research is handled by scheduled research
+        # slots; it must not by itself launch another full account decision.
+        actionable = [r for r in rows if r["kind"] != "research_due"]
+        codes = list(dict.fromkeys(r["code"] for r in actionable if r["code"] in holdings))
+        deep_count = candidate_count = 0
+        for code in dict.fromkeys(r["code"] for r in actionable if r["code"] not in holdings):
+            deep = research.get(code, {}).get("status") != "ready"
+            if deep and deep_count >= cfg["deep_research_candidate_batch_size"]:
+                continue
+            if candidate_count >= cfg["event_batch_size"]:
+                break
+            codes.append(code)
+            candidate_count += 1
+            deep_count += int(deep)
         selected = [dict(r) for r in rows if r["code"] in codes]
         if not selected:
             return []
@@ -439,7 +488,13 @@ def claim_events(store, mode, now=None):
         return selected
 
 
-def finish_events(store, rows, success, error=""):
+def finish_events(store, rows, success, error="", reviewed_codes=None):
     with store._get_conn() as conn:
+        # Research can expire between claim and snapshot construction. Leave
+        # any omitted stock pending instead of acknowledging work never done.
+        omitted = [r for r in rows if success and reviewed_codes is not None and r["code"] not in reviewed_codes]
+        conn.executemany("UPDATE opportunity_events SET status='pending',batch_id='',finished_at=NULL,error='' WHERE id=? AND status='processing'",
+                         [(r["id"],) for r in omitted])
+        completed = [r for r in rows if r not in omitted]
         conn.executemany("UPDATE opportunity_events SET status=?,finished_at=?,error=? WHERE id=? AND status='processing'",
-                         [("done" if success else "needs_review",stamp(),error[:500],r["id"]) for r in rows])
+                         [("done" if success else "needs_review",stamp(),error[:500],r["id"]) for r in completed])

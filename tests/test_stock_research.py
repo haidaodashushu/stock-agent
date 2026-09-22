@@ -192,6 +192,9 @@ class StockResearchTests(unittest.TestCase):
                     (mode,code,setup_id,kind,dedup,payload,created_at,status,batch_id)
                     VALUES('simulated','002189','history','new_opportunity',?,'{}',?,'done',?)""",
                     (f"prior-{i}",at,f"simulated:{at}"))
+        trial.record_decision(self.store, "simulated", {"signals":[{
+            "code":"002185", "action":"watch", "watch_plan":plan(review_after_minutes=60)}]},
+            {"as_of":trial.stamp(NOW-timedelta(minutes=5)), "positions":[]}, {}, NOW-timedelta(minutes=5))
         trial.observe(self.store,"simulated",{"002185":quote()},{},NOW)
         first=trial.claim_events(self.store,"simulated",NOW)
         self.assertTrue(first)
@@ -200,7 +203,7 @@ class StockResearchTests(unittest.TestCase):
         trial.ingest(self.store,[candidate("002186",str(NOW.date())),candidate("002187")],later)
         trial.observe(self.store,"simulated",{c:quote(now=later) for c in ("002186","002187")},{},later)
         rows=trial.claim_events(self.store,"simulated",later)
-        self.assertEqual([(r["code"],r["kind"]) for r in rows],[("002186","new_opportunity"),("002187","research_due")])
+        self.assertEqual([(r["code"],r["kind"]) for r in rows],[("002186","new_opportunity")])
         trial.finish_events(self.store,rows,True)
         again=later+timedelta(minutes=1)
         trial.observe(self.store,"simulated",{c:quote(now=again) for c in ("002186","002187")},{},again)

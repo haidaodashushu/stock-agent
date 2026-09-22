@@ -11,5 +11,5 @@
   "quote_cache_seconds": 45,
   "minute_cache_seconds": 600,
   "event_max_age_minutes": 15,
-  "event_batch_size": 3
+  "event_batch_size": 30
 }

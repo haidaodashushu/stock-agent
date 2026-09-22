@@ -367,7 +367,7 @@ class TradingCycleTests(unittest.TestCase):
             "results": [],
         }
         text = render_report(self.simulated_context, "simulated", decision, sim)
-        self.assertIn("模拟盘半小时操盘", text)
+        self.assertIn("模拟盘定时操盘", text)
         self.assertIn("模拟持仓股（000001）继续观察", text)
         self.assertIn("模拟持仓股（000001）走强，候选股（000002）等待确认", text)
         self.assertIn("候选股（000002）存在追高风险", text)
