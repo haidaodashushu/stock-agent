@@ -239,27 +239,32 @@ def _validate_trial_rows(rows: list[dict], context: dict) -> None:
         previous -= timedelta(days=1)
     facts = {r["code"]:r for r in context["positions"]+context["candidates"]}
     for row in rows:
-        row["watch_plan"] = validate_plan(row.get("watch_plan"))
-        research = facts[row["code"]].get("research") or {}
-        needs_research = research.get("status") != "ready" and row["action"] not in {"sell","reduce","clear"}
-        if research and (needs_research or row.get("research_update") is not None):
-            from data.stock_research import validate_update
-            row["research_update"] = validate_update(row.get("research_update"),research)
-        if context.get("decision_assessment_required"):
-            from data.trading_assessment import validate
-            validate(row,facts[row["code"]],context)
-        if row["action"] not in {"buy", "add"}:
-            continue
-        if research and (row.get("research_update") or {}).get("status") == "data_pending":
-            raise ValueError(f"{row['code']}: research data pending cannot support new risk")
-        evidence = facts[row["code"]]
-        if not valid_quote(evidence.get("quote", {}), now):
-            raise ValueError(f"{row['code']}: fresh source-timestamped quote required")
-        daily = evidence.get("technical", {})
-        if daily.get("date") != str(previous) or daily.get("quality") != "verified_qfq":
-            raise ValueError(f"{row['code']}: previous-session verified adjusted daily bars required")
-        if row["watch_plan"]["state"] in {"invalid", "data_pending", "account_blocked"}:
-            raise ValueError(f"{row['code']}: buy conflicts with watch_plan state")
+        try:
+            row["watch_plan"] = validate_plan(row.get("watch_plan"))
+            research = facts[row["code"]].get("research") or {}
+            needs_research = research.get("status") != "ready" and row["action"] not in {"sell","reduce","clear"}
+            if research and (needs_research or row.get("research_update") is not None):
+                from data.stock_research import validate_update
+                row["research_update"] = validate_update(row.get("research_update"),research)
+            if context.get("decision_assessment_required"):
+                from data.trading_assessment import validate
+                validate(row,facts[row["code"]],context)
+            if row["action"] not in {"buy", "add"}:
+                continue
+            if research and (row.get("research_update") or {}).get("status") == "data_pending":
+                raise ValueError(f"{row['code']}: research data pending cannot support new risk")
+            evidence = facts[row["code"]]
+            if not valid_quote(evidence.get("quote", {}), now):
+                raise ValueError(f"{row['code']}: fresh source-timestamped quote required")
+            daily = evidence.get("technical", {})
+            if daily.get("date") != str(previous) or daily.get("quality") != "verified_qfq":
+                raise ValueError(f"{row['code']}: previous-session verified adjusted daily bars required")
+            if row["watch_plan"]["state"] in {"invalid", "data_pending", "account_blocked"}:
+                raise ValueError(f"{row['code']}: buy conflicts with watch_plan state")
+        except ValueError as exc:
+            if str(exc).startswith(f"{row['code']}:"):
+                raise
+            raise ValueError(f"{row['code']}: {exc}") from exc
 
 
 def _portfolio_review(payload: dict[str, Any]) -> dict[str, Any]:
@@ -425,7 +430,10 @@ def validate_live_decision(
         for row in positions
         if isinstance(row, dict)
     }
+    facts_by_code = {stock["code"]:stock for stock in positions+candidates}
     for row in decisions:
+        from data.trading_review_policy import intent_evidence
+        row["notification_evidence"] = intent_evidence(facts_by_code[row["code"]], context)
         _validate_new_entry_gate(row, candidates, position_codes)
         if row["action"] == "sell" and row["code"] not in position_codes:
             raise ValueError(f"{row['code']}: live sell requires a live shadow position")

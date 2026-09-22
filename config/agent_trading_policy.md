@@ -40,8 +40,8 @@
 当 overview.refresh.opportunity_trial=true 时，每行提交 watch_plan，遵循 decision_contract。
 读取 opportunity.previous_plan 与原始机会档案，保留尚未证伪的原论据和结构失效位置；变更条件须在 wait_reason 说明新证据。
 review_above/review_below 是程序唤醒条件，不是自动买卖指令；价格必须来自本轮可核验的结构，不得为填字段编造。
-没有可靠价格条件时填 null，明确缺什么证据并设置 review_after_minutes（交易分钟）；程序生成去重的到期复核事件。
-previous_plan.next_review_at是上一轮计划的最早复核目标，午休、休市及尾盘启动保护会顺延。普通事件和到期复核均无每日次数上限或额外账户冷却；每只股票按自己的review_after_minutes到期，新有效事件可提前触发。监测约3分钟一轮，队列每分钟检查，账户互斥及候选分批仍可能导致排队，不得声称模型一定在目标时刻完成。持仓复核优先，同一计划事件去重，未到期且没有新变化时不因检查队列重复调用。
+没有可靠价格条件时填 null，明确缺什么证据并设置 review_after_minutes（交易分钟）；到期后程序先用缓存行情检查相对上次完成决策的实质变化，再决定是否生成复核事件。
+previous_plan.next_review_at是上一轮计划的最早复核目标，午休、休市及尾盘启动保护会顺延。普通事件和到期复核均无每日次数上限或额外账户冷却；每只股票按自己的review_after_minutes到期检查变化；普通到期且无变化时等待定时操盘，缺少比较基准则允许复核，新有效事件可提前触发。监测约3分钟一轮，队列每分钟检查，账户互斥及候选分批仍可能导致排队，不得声称模型一定在目标时刻完成。持仓复核优先，同一计划事件去重，未到期且没有新变化时不因检查队列重复调用。
 历史机会的 requires_requalification=true 表示只有观察权。新买入须当轮重新核验路线、结构和公司证据，明确
 requalified=true 与 requalification_reason；不能把旧名单资格当作当前资格。源行情过期或日线未验证时不新买。
 事件重评集中解释本次新变化，其他持仓仍逐一检查风险。正常波动保持原计划，不因调用频率提高而增加交易。
@@ -81,6 +81,7 @@ research.status=refresh_required 表示新建研究、证据变化、研究到�
   insufficient为关键证据不足；conflicting为关键可靠证据相互冲突且尚未解释。辅助资金数据缺失可标partial。
 - portfolio：fit为当前账户可执行且暴露合理；conditional为需要同时减仓或替换等可核验前置动作；blocked为当前账户无法满足条件。
   blocked不能降低股票本身的研究等级；组合条件仍必须通过原有执行器。
+  watch_plan.state=account_blocked时，portfolio.grade应为blocked。非交易行若写conditional，程序按当前前置条件尚未满足归一化为blocked并记录调整；买卖动作不享受此修正。
 
 early_start的判断围绕低点企稳、收敛、短期结构改善和当轮承接，不能要求已经形成成熟主升趋势。
 strong_continuation的判断围绕突破后的保持、回踩承接、量能效率和失败风险，不能用涨幅大替代确认。
@@ -104,3 +105,21 @@ weak表示不确定性较大。明确没有机会时可以高置信度观察。�
 market.regime只是指数快照背景。classification_usable=false时neutral为兼容占位，按数据不足解释；
 指数涨跌数量不等于全市场个股广度，不能据此宣布牛熊周期、主线持续或板块轮动速度。还需核对指数source_time。
 市场数据不足本身不要求冻结所有股票，也不能充当强市场确认；逐股判断实际证据及风险。
+
+
+## T+1入场压力情景与实盘建议续评
+
+overview.refresh.entry_risk_policy存在时，新买/加仓必须提交position_plan.overnight。
+entry_basis说明本路线的入场确认、追价/回撤风险和现在入场的理由；thesis_horizon说明为什么可以承受到首次可卖交易日。
+acknowledge_t1=true、requires_intraday_exit=false。如果买入逻辑必须依靠当日卖掉新增股份才成立，应等待。
+early_failure_response区分旧仓可卖量与新增锁定量：当日走弱时可以暂停加仓、更新风险条件、处理允许卖出的旧仓，不能承诺卖出新增仓。
+next_session_review明确次日低开、延续、失效时的复核和应对条件；持仓每轮继续检查可卖量及隔夜风险。
+压力价是仓位测试假设，不冒充技术支撑：stress_price不高于现价下跌stress_floor_pct后的价格，
+存在invalidation_price时还须不高于该参考位再下跌gap_buffer_pct后的价格，取更低者。可以采用更严压力。
+默认stress_floor_pct=5、gap_buffer_pct=2；以本轮策略字段为准。声明max_loss_equity_pct，默认上限为账户权益的1%。
+增量金额×(1-压力价/现价)不得超过账户权益×声明预算/100，超预算缩减金额或等待，不得抬高压力价绕过。
+这是单笔增量情景约束，仍须评估全部当日锁定仓和行业集中风险；未计费用滑点，实际跳空与亏损可更大，不是最大损失保证。
+
+实盘建议到期本身不是新的买卖理由。同日、同方向、同数量且价格变化不足1%，账户事实、研究及新事件未变化时，
+程序复用已有建议记录，不再生成或通知同一建议。实际成交、反向动作、新交易日、数量/账户/研究变化或新的有效事件可重新评估。
+不要通过改写理由制造新建议；原有待执行建议冲突、仓位和可卖量等校验仍适用。

@@ -114,7 +114,19 @@ def validate(row, stock, context):
             if result["evidence"]["grade"] != "reliable" or "price_structure" not in support or len(support)<2:
                 raise ValueError("strong entry confidence requires reliable price structure plus an independent evidence family")
     if (row.get("watch_plan") or {}).get("state") == "account_blocked" and result["portfolio"]["grade"] != "blocked":
-        raise ValueError("account_blocked plan must identify the portfolio constraint")
+        if result["portfolio"]["grade"] == "conditional" and row["action"] in {"hold", "watch", "noop"}:
+            # The model explicitly chose not to trade until prerequisites hold.
+            # Canonicalize the current constraint conservatively; never repair
+            # a trading action into permission to buy/sell.
+            result["portfolio"]["grade"] = "blocked"
+            row["assessment_adjustments"] = [{"field":"assessment.portfolio.grade",
+                "submitted":"conditional", "normalized":"blocked",
+                "reason":"account_blocked with no trade means prerequisites are not currently satisfied"}]
+        else:
+            raise ValueError(
+                "watch_plan.state=account_blocked conflicts with assessment.portfolio.grade="
+                f"{result['portfolio']['grade']}; identify the current constraint as blocked, "
+                "or select a watch/holding plan consistent with the actual account; do not change a trade merely to pass validation")
     row["assessment"] = result
     if increases_risk:
         row["position_plan"] = position_plan(row, stock, context)
@@ -154,6 +166,42 @@ def position_plan(row, stock, context):
         result["scenario"].update(available=True,requested_notional=round(amount,2),
                                   loss_to_invalidation=round(loss,2),
                                   equity_pct=round(loss/equity*100,3) if math.isfinite(equity) and equity>0 else None)
+    if context.get("entry_risk_policy"):
+        result["overnight"] = overnight_plan(raw.get("overnight"), result, amount, price, context)
+    return result
+
+
+def overnight_plan(raw, plan, amount, price, context):
+    """A T+1 sizing scenario, not an executable stop or maximum possible loss."""
+    from data.trading_review_policy import finite
+    from data.opportunity_trial import expiry
+    policy = context["entry_risk_policy"]
+    if not isinstance(raw, dict) or raw.get("acknowledge_t1") is not True or raw.get("requires_intraday_exit") is not False:
+        raise ValueError("position_plan.overnight requires acknowledge_t1=true and requires_intraday_exit=false; new shares cannot rely on same-day exit")
+    result = {key:text(raw.get(key), f"position_plan.overnight.{key}") for key in
+              ("entry_basis", "thesis_horizon", "early_failure_response", "next_session_review")}
+    price, stress = finite(price), finite(raw.get("stress_price"))
+    budget_pct = finite(raw.get("max_loss_equity_pct"))
+    equity = finite((context.get("account") or {}).get("total_equity"))
+    if not price or price <= 0 or not equity or equity <= 0:
+        raise ValueError("T+1 risk budget requires positive snapshot price and account equity")
+    ceiling = price*(1-float(policy["stress_floor_pct"])/100)
+    if plan.get("invalidation_price"):
+        ceiling = min(ceiling, plan["invalidation_price"]*(1-float(policy["gap_buffer_pct"])/100))
+    if stress is None or stress <= 0 or stress > ceiling+1e-8:
+        raise ValueError(f"position_plan.overnight.stress_price must be positive and <= {ceiling:.4f}; include the configured drawdown and a gap below any structural reference")
+    if budget_pct is None or not 0 < budget_pct <= float(policy["max_loss_equity_pct"]):
+        raise ValueError(f"position_plan.overnight.max_loss_equity_pct must be >0 and <= {policy['max_loss_equity_pct']}")
+    loss = amount*(1-stress/price)
+    budget = equity*budget_pct/100
+    if loss > budget+0.01:
+        maximum = budget/(1-stress/price)
+        raise ValueError(f"T+1 stress loss {loss:.2f} exceeds declared budget {budget:.2f}; reduce requested notional to <= {maximum:.2f} or wait; do not weaken the stress assumption")
+    result.update(acknowledge_t1=True, requires_intraday_exit=False, stress_price=stress,
+                  max_loss_equity_pct=budget_pct, estimated_loss=round(loss,2),
+                  requested_notional=round(amount,2), budget_amount=round(budget,2),
+                  first_sellable_session=expiry(context["as_of"][:10],1),
+                  basis="incremental snapshot scenario; fees/slippage excluded; actual gap/loss may be larger")
     return result
 
 

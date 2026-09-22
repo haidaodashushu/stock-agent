@@ -187,6 +187,8 @@ def execute(payload: Any, *, dry_run: bool = False) -> dict[str, Any]:
     conn = StockStore()._get_conn()
     conn.row_factory = sqlite3.Row
     try:
+        from data.trading_review_policy import ensure_intent_evidence, unchanged_intent, account_facts
+        ensure_intent_evidence(conn)
         expire_stale_proposed_intents(conn)
         snap = account_snapshot(conn)
         for decision in normalized:
@@ -247,6 +249,12 @@ def execute(payload: Any, *, dry_run: bool = False) -> dict[str, Any]:
                     result["errors"].append(
                         f"实时价相对决策价偏离{drift_pct:.2f}%，超过{max_drift_pct:.2f}%，需重新分析"
                     )
+            if not result["errors"]:
+                duplicate = unchanged_intent(conn, decision, price, volume, snap, datetime.now())
+                if duplicate:
+                    result.update(message="unchanged_live_intent_suppressed", previous_intent=duplicate)
+                    results.append(result)
+                    continue
             if _duplicate_pending(conn, action, code):
                 result["errors"].append("同代码同方向已有待执行实盘建议单，拒绝重复生成")
             if not result["errors"]:
@@ -265,6 +273,9 @@ def execute(payload: Any, *, dry_run: bool = False) -> dict[str, Any]:
             intent = _insert_intent(
                 conn, decision, price, volume, effective_limit_price,
             )
+            conn.execute("INSERT OR REPLACE INTO live_intent_evidence VALUES(?,?)",
+                         (intent["intent_id"], json.dumps({"account":account_facts(snap),
+                          "evidence":decision["raw"].get("notification_evidence") or {}}, ensure_ascii=False)))
             conn.commit()
             result["executed"] = True
             result["created_intent"] = True
@@ -276,7 +287,7 @@ def execute(payload: Any, *, dry_run: bool = False) -> dict[str, Any]:
 
     created = [r for r in results if r.get("created_intent")]
     rejected = [r for r in results if r.get("errors")]
-    noop = [r for r in results if r.get("message") == "no_live_intent_action"]
+    noop = [r for r in results if r.get("message") in {"no_live_intent_action", "unchanged_live_intent_suppressed"}]
     return {
         "schema": "live_trade_execution.v1",
         "as_of": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

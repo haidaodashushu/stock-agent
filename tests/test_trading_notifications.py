@@ -58,6 +58,12 @@ class TradingNotificationTests(unittest.TestCase):
         _, messages, calls = self.submit({'results':[{'created_intent':False}]}, mode='live')
         self.assertEqual((messages,calls), (0,1))
 
+    def test_suppressed_repeated_live_buy_is_saved_without_notification(self):
+        result, messages, calls = self.submit({'results':[{'created_intent':False,'executed':False,
+            'errors':[], 'message':'unchanged_live_intent_suppressed'}]}, mode='live', action='buy')
+        self.assertEqual((messages,calls), (0,1))
+        self.assertEqual(result['notification']['reason'], 'event_review_without_action')
+
     def test_scheduled_report_is_sent_even_without_action(self):
         _, messages, _ = self.submit({'results':[]}, event=False)
         self.assertEqual(messages, 1)

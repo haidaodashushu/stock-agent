@@ -157,14 +157,14 @@ def trading_decision_contract(
     }
     row_shape["watch_plan"] = {
         "required_when": "overview.refresh.opportunity_trial=true",
-        "state": "watch|account_blocked|data_pending|invalid|holding",
+        "state": "watch|account_blocked|data_pending|invalid|holding; account_blocked requires portfolio.grade=blocked; conditional on a non-trading row is conservatively normalized to blocked with an audit record",
         "thesis": "durable original thesis, preserve unless new evidence changes it",
         "wait_reason": "why hold/wait/act now and what would change the decision",
         "review_above": "positive observed-structure price or null",
         "review_below": "positive pullback/review price or null",
         "invalidation_below": "positive original structural risk level or null",
         "invalidation_reason": "required when invalid; distinguish portfolio reduction",
-        "review_after_minutes": "integer 15..240 trading minutes for this stock's plan; default 30; queues a deduplicated due review without a daily quota or account cooldown, subject to session alignment, account lock and batching; new events may trigger earlier; not a guaranteed completion time",
+        "review_after_minutes": "integer 15..240 trading minutes for this stock's plan; default 30; checks for material changes against the last completed decision; unchanged timers wait for scheduled review; missing baseline fails open; no daily quota or account cooldown, subject to session alignment, account lock and batching; new events may trigger earlier; not a guaranteed completion time",
         "requalified": "true only for an explicitly revalidated retained opportunity",
         "requalification_reason": "current route, structure, company evidence and account fit",
     }
@@ -197,6 +197,17 @@ def trading_decision_contract(
         "invalidation_basis":"1..240 characters; source basis or why no reliable level exists",
         "risk_budget_reason":"1..240 characters; affordability of loss and uncertainty, including inability to immediately exit",
         "concentration_reason":"1..240 characters; effect on stock/industry exposure and any planned replacement",
+    }
+    row_shape["position_plan"]["overnight"] = {
+        "required_when":"buy/add and overview.refresh.entry_risk_policy is present",
+        "acknowledge_t1":"must be true; newly bought shares cannot be sold the same session",
+        "requires_intraday_exit":"must be false; if the thesis depends on a same-day exit, wait instead",
+        "entry_basis":"1..240 characters; route-specific confirmation, current chase/pullback risk, why enter now",
+        "thesis_horizon":"1..240 characters; why the thesis and position size can survive through the first sellable session",
+        "early_failure_response":"1..240 characters; executable response to weakening today, distinguish old sellable shares from new locked shares",
+        "next_session_review":"1..240 characters; opening gap/continuation/failure conditions and next-session response",
+        "stress_price":"positive scenario price <= quote.price*(1-stress_floor_pct/100), and <= invalidation_price*(1-gap_buffer_pct/100) when that reference exists; use overview.refresh.entry_risk_policy, not an invented support level",
+        "max_loss_equity_pct":"positive declared incremental stress-loss budget <= policy.max_loss_equity_pct; requested notional*(1-stress_price/quote.price) <= account.total_equity*budget/100; reduce size or wait if exceeded; actual loss can be larger",
     }
     row_shape["exit_plan"] = {
         "required_when":"assessment enabled and action is sell/reduce/clear",

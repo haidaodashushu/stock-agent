@@ -342,8 +342,14 @@ def observe(store, mode, quotes, positions, now=None):
             due = stored.get("next_review_at")
             if plan and due and stamp(now) >= due:
                 kind = "holding_review_due" if code in positions else "review_due"
-                queue_event(conn, mode, code, setup_id, kind, stored["reviewed_at"],
-                            {**payload, "due_at": due, "reviewed_at": stored["reviewed_at"]}, now)
+                from data.trading_review_policy import due_change
+                eligibility = due_change(stored, acknowledged.get(code, {}), q, now, settings())
+                if eligibility["material"]:
+                    queue_event(conn, mode, code, setup_id, kind, stored["reviewed_at"],
+                                {**payload, "due_at": due, "reviewed_at": stored["reviewed_at"],
+                                 "eligibility": eligibility}, now)
+                conn.execute("INSERT OR REPLACE INTO opportunity_cache VALUES(?,?,?,?)",
+                             (f"review_gate_{mode}", code, encode({"reviewed_at":stored["reviewed_at"], **eligibility}), stamp(now)))
             if not plan:
                 kind = "new_opportunity" if setup.get("first_seen") == str(now.date()) else "research_due"
                 queue_event(conn, mode, code, setup_id, kind, version, payload, now)
@@ -435,6 +441,8 @@ def claim_events(store, mode, now=None):
             holdings = {r["code"] for r in account_snapshot(conn, quotes={}, expire_pending=False)["positions"]}
     from data.stock_research import contexts
     research = contexts(store, queued_codes, setups, now)
+    acknowledged = read_cache(store, f"decision_observation_{mode}", queued_codes, 86400, now)
+    quotes = read_cache(store, "monitor_quote", queued_codes, cfg["quote_max_age_seconds"], now)
     with store._get_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # Uncertain interrupted execution is never automatically replayed.
@@ -450,6 +458,12 @@ def claim_events(store, mode, now=None):
             plan = conn.execute("SELECT reviewed_at FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
             if not plan or plan["reviewed_at"] != obj(row["payload"]).get("reviewed_at"):
                 conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error='review superseded' WHERE id=?", (stamp(now),row["id"]))
+            elif valid_quote(quotes.get(row["code"], {}), now, cfg["quote_max_age_seconds"]):
+                from data.trading_review_policy import due_change
+                gate = due_change(dict(plan), acknowledged.get(row["code"], {}), quotes[row["code"]], now, cfg)
+                if not gate["material"]:
+                    conn.execute("UPDATE opportunity_events SET status='expired',finished_at=?,error=? WHERE id=?",
+                                 (stamp(now),gate["reason"],row["id"]))
         for row in conn.execute("SELECT id,code,dedup FROM opportunity_events WHERE mode=? AND status='pending' AND kind IN ('price_recovery','price_pullback','structure_risk')", (mode,)).fetchall():
             plan = conn.execute("SELECT version FROM opportunity_plans WHERE mode=? AND code=?", (mode,row["code"])).fetchone()
             if plan and row["dedup"].rsplit(":", 1)[-1] != plan["version"]:
