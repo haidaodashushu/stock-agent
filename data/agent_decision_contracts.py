@@ -197,17 +197,6 @@ def trading_decision_contract(
         "risk_budget_reason":"1..240 characters; affordability of loss and uncertainty, including inability to immediately exit",
         "concentration_reason":"1..240 characters; effect on stock/industry exposure and any planned replacement",
     }
-    row_shape["position_plan"]["overnight"] = {
-        "required_when":"buy/add and overview.refresh.entry_risk_policy is present",
-        "acknowledge_t1":"must be true; newly bought shares cannot be sold the same session",
-        "requires_intraday_exit":"must be false; if the thesis depends on a same-day exit, wait instead",
-        "entry_basis":"1..240 characters; route-specific confirmation, current chase/pullback risk, why enter now",
-        "thesis_horizon":"1..240 characters; why the thesis and position size can survive through the first sellable session",
-        "early_failure_response":"1..240 characters; executable response to weakening today, distinguish old sellable shares from new locked shares",
-        "next_session_review":"1..240 characters; opening gap/continuation/failure conditions and next-session response",
-        "stress_price":"positive scenario price <= quote.price*(1-stress_floor_pct/100), and <= invalidation_price*(1-gap_buffer_pct/100) when that reference exists; use overview.refresh.entry_risk_policy, not an invented support level",
-        "max_loss_equity_pct":"positive declared incremental stress-loss budget <= policy.max_loss_equity_pct; requested notional*(1-stress_price/quote.price) <= account.total_equity*budget/100; reduce size or wait if exceeded; actual loss can be larger",
-    }
     row_shape["exit_plan"] = {
         "required_when":"assessment enabled and action is sell/reduce/clear",
         "trigger":"thesis_invalid|structure_failure|portfolio_rebalance|risk_reduction",

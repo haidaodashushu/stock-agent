@@ -110,18 +110,7 @@ market.regime只是指数快照背景。classification_usable=false时neutral为
 市场数据不足本身不要求冻结所有股票，也不能充当强市场确认；逐股判断实际证据及风险。
 
 
-## T+1入场压力情景与实盘建议续评
-
-overview.refresh.entry_risk_policy存在时，新买/加仓必须提交position_plan.overnight。
-entry_basis说明本路线的入场确认、追价/回撤风险和现在入场的理由；thesis_horizon说明为什么可以承受到首次可卖交易日。
-acknowledge_t1=true、requires_intraday_exit=false。如果买入逻辑必须依靠当日卖掉新增股份才成立，应等待。
-early_failure_response区分旧仓可卖量与新增锁定量：当日走弱时可以暂停加仓、更新风险条件、处理允许卖出的旧仓，不能承诺卖出新增仓。
-next_session_review明确次日低开、延续、失效时的复核和应对条件；持仓每轮继续检查可卖量及隔夜风险。
-压力价是仓位测试假设，不冒充技术支撑：stress_price不高于现价下跌stress_floor_pct后的价格，
-存在invalidation_price时还须不高于该参考位再下跌gap_buffer_pct后的价格，取更低者。可以采用更严压力。
-默认stress_floor_pct=5、gap_buffer_pct=2；以本轮策略字段为准。声明max_loss_equity_pct，默认上限为账户权益的1%。
-增量金额×(1-压力价/现价)不得超过账户权益×声明预算/100，超预算缩减金额或等待，不得抬高压力价绕过。
-这是单笔增量情景约束，仍须评估全部当日锁定仓和行业集中风险；未计费用滑点，实际跳空与亏损可更大，不是最大损失保证。
+## 实盘建议续评
 
 实盘建议到期本身不是新的买卖理由。同日、同方向、同数量且价格变化不足1%，账户事实、研究及新事件未变化时，
 程序复用已有建议记录，不再生成或通知同一建议。实际成交、反向动作、新交易日、数量/账户/研究变化或新的有效事件可重新评估。

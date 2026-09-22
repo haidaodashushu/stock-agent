@@ -11,9 +11,5 @@
   "quote_cache_seconds": 45,
   "minute_cache_seconds": 600,
   "event_max_age_minutes": 15,
-  "event_batch_size": 30,
-  "t1_entry_risk": true,
-  "entry_stress_floor_pct": 5.0,
-  "entry_gap_buffer_pct": 2.0,
-  "entry_max_loss_equity_pct": 1.0
+  "event_batch_size": 30
 }

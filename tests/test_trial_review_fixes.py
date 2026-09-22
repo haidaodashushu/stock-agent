@@ -118,56 +118,27 @@ class AssessmentFixTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'002185:.*account_blocked'):
             validate_simulated_decision({'signals':[row]},context)
 
-    def overnight(self):
-        row,context=fixture();row['target_amount']=8000
-        context['entry_risk_policy']={'stress_floor_pct':5,'gap_buffer_pct':2,'max_loss_equity_pct':1}
-        row['position_plan']['overnight']={'acknowledge_t1':True,'requires_intraday_exit':False,
-            'entry_basis':'结构改善但仍控制追价','thesis_horizon':'承受到下一交易日',
-            'early_failure_response':'暂停加仓，新增股份不能当日卖出','next_session_review':'开盘核验缺口及失效条件',
-            'stress_price':8.8,'max_loss_equity_pct':1}
-        return row,context
+    def test_buy_and_add_no_longer_require_overnight_or_apply_fixed_budget(self):
+        for mode,validator,key in [('simulated',validate_simulated_decision,'signals'),('live',validate_live_decision,'decisions')]:
+            for action in ('buy','add') if mode=='simulated' else ('buy',):
+                row,ctx=fixture();ctx['mode']=mode;row['action']=action
+                row['target_amount']=20000
+                # A saved context from before rollback must not reactivate the gate.
+                ctx['entry_risk_policy']={'stress_floor_pct':5,'gap_buffer_pct':2,'max_loss_equity_pct':0.1}
+                if action=='add':
+                    ctx['positions']=ctx.pop('candidates');ctx['candidates']=[]
+                result=validator({key:[row]},ctx)[key][0]
+                self.assertNotIn('overnight',result['position_plan'])
+                self.assertEqual(result['position_plan']['scenario']['requested_notional'],20000)
+                self.assertEqual(result['position_plan']['scenario']['equity_pct'],2)
 
-    def test_t1_scenario_sizes_increment_and_uses_trading_calendar(self):
-        row,ctx=self.overnight()
-        result=validate_simulated_decision({'signals':[row]},ctx)['signals'][0]['position_plan']['overnight']
-        self.assertEqual(result['estimated_loss'],960)
-        self.assertEqual(result['budget_amount'],1000)
-        self.assertEqual(result['first_sellable_session'],'2026-09-21')
-
-    def test_t1_rejects_intraday_dependency_weak_stress_and_excess_budget(self):
-        for field,value,match in [('requires_intraday_exit',True,'same-day exit'),('stress_price',9,'stress_price'),
-                                  ('max_loss_equity_pct',2,'max_loss_equity_pct')]:
-            row,ctx=self.overnight();row['position_plan']['overnight'][field]=value
-            with self.assertRaisesRegex(ValueError,match): validate_simulated_decision({'signals':[row]},ctx)
-        row,ctx=self.overnight();row['target_amount']=10000
-        with self.assertRaisesRegex(ValueError,'exceeds declared budget'): validate_simulated_decision({'signals':[row]},ctx)
-        row,ctx=self.overnight();del row['position_plan']['overnight']
-        with self.assertRaisesRegex(ValueError,'overnight requires'): validate_simulated_decision({'signals':[row]},ctx)
-
-    def test_t1_policy_also_applies_to_add_but_not_risk_reducing_exit(self):
-        row,ctx=self.overnight();row['action']='add'
-        ctx['positions']=ctx.pop('candidates');ctx['candidates']=[]
-        del row['position_plan']['overnight']
-        with self.assertRaisesRegex(ValueError,'overnight requires'):
-            validate_simulated_decision({'signals':[row]},ctx)
-        row['action']='reduce';row['sell_pct']=0.5
-        row['exit_plan']={'trigger':'risk_reduction','reason':'风险恶化','why_now':'旧仓可卖'}
-        self.assertEqual(validate_simulated_decision({'signals':[row]},ctx)['signals'][0]['action'],'reduce')
-
-    def test_t1_without_structural_level_still_uses_drawdown_floor(self):
-        row,ctx=self.overnight();row['position_plan']['invalidation_price']=None
-        row['position_plan']['overnight']['stress_price']=9.6
-        with self.assertRaisesRegex(ValueError,'stress_price'): validate_simulated_decision({'signals':[row]},ctx)
-        row['position_plan']['overnight']['stress_price']=9.5
-        result=validate_simulated_decision({'signals':[row]},ctx)['signals'][0]
-        self.assertFalse(result['position_plan']['scenario']['available'])
-        self.assertEqual(result['position_plan']['overnight']['estimated_loss'],400)
-
-    def test_live_explicit_volume_and_server_evidence(self):
-        row,ctx=self.overnight();ctx['mode']='live';row['volume']=200
+    def test_old_overnight_fields_do_not_reactivate_gate_and_live_evidence_remains_trusted(self):
+        row,ctx=fixture();ctx['mode']='live';row['volume']=200
+        row['position_plan']['overnight']={'stress_price':0,'max_loss_equity_pct':0}
         row['notification_evidence']={'research_facts_version':'spoof'}
         result=validate_live_decision({'decisions':[row]},ctx)['decisions'][0]
-        self.assertEqual(result['position_plan']['overnight']['requested_notional'],2000)
+        self.assertNotIn('overnight',result['position_plan'])
+        self.assertEqual(result['position_plan']['scenario']['requested_notional'],2000)
         self.assertEqual(result['notification_evidence']['research_facts_version'],'v1')
 
 

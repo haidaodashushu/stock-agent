@@ -1066,10 +1066,6 @@ def refresh_trading_state(
             "financial_refresh": financial_refresh,
             "opportunity_trial": trial_on,
             "decision_assessment_required": trial_on and trial.settings().get("decision_assessment",False),
-            "entry_risk_policy": ({"stress_floor_pct":trial.settings().get("entry_stress_floor_pct",5.0),
-                                   "gap_buffer_pct":trial.settings().get("entry_gap_buffer_pct",2.0),
-                                   "max_loss_equity_pct":trial.settings().get("entry_max_loss_equity_pct",1.0)}
-                                  if trial_on and trial.settings().get("t1_entry_risk",True) else None),
             "focus_codes": sorted(focus or []),
             "monitored_candidates": monitored_count,
             "collection_started_at": now.strftime("%Y-%m-%d %H:%M:%S"),
