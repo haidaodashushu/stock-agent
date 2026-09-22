@@ -1,4 +1,4 @@
-"""Slow company inputs: existing provider first, Fuyao fills missing evidence.
+"""Slow company inputs: shared daily cache, Fuyao first, IwenCai fills gaps.
 
 Reads never call the network. Refreshes are capped, cached for a day and failures
 back off for an hour. Metrics keep their report period and missing values.
@@ -17,6 +17,38 @@ FIELDS = {
     "debt_ratio": ("资产负债率",),
     "operating_cash_flow": ("经营活动产生的现金流量净额",),
 }
+
+
+FUYAO_FIELDS = {
+    "roe": ("index_weighted_avg_roe",), "roa": ("total_assets_net_ratio",),
+    "gross_margin": ("sale_gross_margin",), "net_margin": ("sale_net_interest_ratio",),
+    "debt_ratio": ("assets_debt_ratio",),
+    "revenue_yoy": ("operating_income_yoy_growth_ratio", "calculate_operating_income_yoy_growth_ratio"),
+    "profit_yoy": ("calculate_parent_holder_net_profit_yoy_growth_ratio",),
+}
+
+
+def finite(value):
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def statement_period(row, now):
+    # Publication date and accounting period are distinct; never use a future report.
+    from zoneinfo import ZoneInfo
+    try:
+        published = datetime.fromtimestamp(float(row["report_date_ms"]) / 1000, ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+        end = datetime.fromtimestamp(float(row["period_end_ms"]) / 1000, ZoneInfo("Asia/Shanghai")).replace(tzinfo=None)
+        if published > now or end > now or row.get("currency") != "CNY":
+            return ""
+        return period_date(end.strftime("%Y%m%d"))
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        return ""
 
 
 def period_date(value):
@@ -110,56 +142,86 @@ def refresh_financials(store, codes, now=None, limit=3):
         summary["requested"] += 1
         errors = []
         evidence = {"code":code, "period":""}
+        adapter = FuyaoAdapter()
+        year, quarter = FinanceService.recent_periods(now)[0]
+        report = f"{year}-{quarter}"
+        income = []
         try:
-            raw = IwenCaiClient(timeout=12).query2data(
-                f"{code} 最新财报 净资产收益率 总资产收益率 毛利率 净利率 每股收益 营业收入同比增长率 净利润同比增长率 资产负债率 经营现金流",
-                skill_id="hithink-finance-query", limit=1)
-            matching = [r for r in raw.get("datas",[]) if str(r.get("股票代码", "")).split(".")[0] == code]
-            if matching:
-                evidence = parse_financial(matching[0], code)
-            if not evidence.get("period"):
-                errors.append("iwencai report period unavailable")
-        except Exception:
-            errors.append("iwencai financial request failed")
-        if any(evidence.get(field) is None for field in FIELDS):
-            period = evidence.get("period") or ""
-            if period:
-                report = period[:4] + "-" + str(int(period[4:6])//3)
-            else:
-                year, quarter = FinanceService.recent_periods(now)[0]
-                report = f"{year}-{quarter}"
+            income = adapter.statement(code, "income")
+            published = [row for row in income if statement_period(row, now)]
+            if published:
+                latest = max(published, key=lambda row: statement_period(row, now))
+                period = statement_period(latest, now)
+                report = period[:4] + "-" + str(int(period[4:6]) // 3)
+        except Exception as exc:
+            errors.append(str(exc))
+        period = period_date(report[:4] + "Q" + report[-1])
+        evidence = {"code": code, "period": period, "source": "fuyao", "field_sources": {}}
+        try:
+            primary = adapter.financials(code, report)
+            if primary:
+                evidence["supplement"] = primary
+                for field, names in FUYAO_FIELDS.items():
+                    for name in names:
+                        value = finite(primary["indicators"].get(name))
+                        if value is not None:
+                            evidence[field] = value
+                            evidence["field_sources"][field] = f"fuyao:{name}"
+                            break
+        except Exception as exc:
+            errors.append(str(exc))
+        for kind, field, key in (("income", "eps", "basic_eps"),
+                                  ("cash-flow", "operating_cash_flow", "act_cash_flow_net")):
             try:
-                supplement = FuyaoAdapter().financials(code, report)
-                if supplement and any(v is not None for v in supplement["indicators"].values()):
-                    evidence["supplement"] = supplement
-                    evidence["period"] = period or period_date(report[:4]+"Q"+report[-1])
-                    aliases = {
-                        "roe":("index_weighted_avg_roe",), "roa":("total_assets_net_ratio",),
-                        "gross_margin":("sale_gross_margin",), "net_margin":("sale_net_interest_ratio",),
-                        "debt_ratio":("assets_debt_ratio",),
-                        "revenue_yoy":("operating_income_yoy_growth_ratio","calculate_operating_income_yoy_growth_ratio"),
-                        "profit_yoy":("calculate_parent_holder_net_profit_yoy_growth_ratio",),
-                    }
-                    for field, names in aliases.items():
-                        if evidence.get(field) is None:
-                            for name in names:
-                                value = supplement["indicators"].get(name)
-                                if value is not None:
-                                    evidence[field] = value
-                                    evidence.setdefault("field_sources",{})[field] = f"fuyao:{name}"
-                                    break
+                rows = income if kind == "income" else adapter.statement(code, kind)
+                for row in rows:
+                    if statement_period(row, now) == period:
+                        value = finite(row.get(key))
+                        if value is not None:
+                            evidence[field] = value
+                            evidence["field_sources"][field] = f"fuyao:{key}"
+                            break
             except Exception as exc:
                 errors.append(str(exc))
+        if any(evidence.get(field) is None for field in FIELDS):
+            try:
+                raw = IwenCaiClient(timeout=12).query2data(
+                    f"{code} 最新财报 净资产收益率 总资产收益率 毛利率 净利率 每股收益 营业收入同比增长率 净利润同比增长率 资产负债率 经营现金流",
+                    skill_id="hithink-finance-query", limit=1)
+                matching = [r for r in raw.get("datas", []) if str(r.get("股票代码", "")).split(".")[0] == code]
+                fallback = parse_financial(matching[0], code) if matching else {}
+                fallback_period = fallback.get("period", "")
+                has_primary = any(evidence.get(field) is not None for field in FIELDS)
+                if fallback_period and fallback_period <= now.strftime("%Y%m%d"):
+                    if not has_primary or fallback_period > period:
+                        evidence = {**fallback, "field_sources": {
+                            field: "iwencai" for field in FIELDS if fallback.get(field) is not None}}
+                    elif fallback_period == period:
+                        for field in FIELDS:
+                            if evidence.get(field) is None and fallback.get(field) is not None:
+                                evidence[field] = fallback[field]
+                                evidence["field_sources"][field] = "iwencai"
+                        if "iwencai" in evidence["field_sources"].values():
+                            evidence["source"] = "fuyao+iwencai"
+                else:
+                    errors.append("iwencai report period unavailable")
+            except Exception:
+                errors.append("iwencai financial request failed")
         available = bool(evidence.get("period")) and (any(evidence.get(f) is not None for f in FIELDS) or bool(evidence.get("supplement")))
         if not available:
             errors.append("financial evidence unavailable")
             evidence = json.loads(states.get(code,{}).get("payload", "{}"))
         # Do not advance an old observation's timestamp on a failed refresh.
         fetched = stamp if available else states.get(code,{}).get("fetched_at", stamp)
-        retry = now + (timedelta(days=1) if available and not errors else timedelta(hours=1))
+        retry = now + (timedelta(days=1) if available else timedelta(hours=1))
         with store._get_conn() as conn:
             conn.execute("INSERT OR REPLACE INTO research_company_inputs VALUES(?,?,?,?,?)",
                          (code,json.dumps(evidence,ensure_ascii=False),fetched,retry.isoformat(sep=" ",timespec="seconds"),"; ".join(errors)))
+            if available:
+                factor_fields = [field for field in FIELDS if field != "operating_cash_flow"]
+                conn.execute(
+                    "INSERT OR REPLACE INTO financial_factors(code,period," + ",".join(factor_fields) + ",source,updated_at) VALUES(" + ",".join("?" for _ in range(len(factor_fields)+4)) + ")",
+                    [code, FinanceService.normalize_period(evidence["period"]), *[evidence.get(field) for field in factor_fields], evidence.get("source", "fuyao"), fetched])
         summary["available"] += int(available)
         if errors: summary["errors"][code] = errors
     summary["deferred"] = max(0,len(due)-limit)

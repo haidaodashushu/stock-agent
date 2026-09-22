@@ -1,6 +1,6 @@
 """板块轮动服务。
 
-用问财板块涨幅 + 资金流数据构建轮动评分，并把板块强弱映射回股票候选池。
+用扶摇板块量价构建轮动评分；缺失资金流不参与评分，并把板块强弱映射回股票候选池。
 定位：给选股/盯盘提供“主线 + 补涨 + 过热”辅助因子，不替代量价策略。
 """
 from __future__ import annotations
@@ -40,7 +40,11 @@ class SectorRotationSignal:
     pct_3m: float = 0.0
     pct_1m: float = 0.0
     pct_5d: float = 0.0
-    fund_inflow: float = 0.0
+    fund_inflow: float | None = 0.0
+    pct_1d: float | None = None
+    turnover: float | None = None
+    source_time: str | None = None
+    evidence_status: str = "available"
     score: float = 0.0
     stage: str = "neutral"  # leader / accelerating / laggard / overheat / neutral
     tags: List[str] = field(default_factory=list)
@@ -59,6 +63,7 @@ class SectorRotationService:
         store: StockStore | None = None,
     ):
         self.client = client or IwenCaiClient(min_interval=0.6, timeout=40)
+        self.use_fuyao = client is None
         self.cache_minutes = cache_minutes
         self.store = store or StockStore()
 
@@ -70,6 +75,36 @@ class SectorRotationService:
                 return cached
 
         raw = self._fetch_raw(limit=limit)
+        if "fuyao" in raw:
+            data = raw["fuyao"]
+            signals = []
+            for row in data.get("rows", []):
+                if not self._is_meaningful_sector(row["name"]):
+                    continue
+                signal = SectorRotationSignal(**row)
+                if all(row.get(field) is not None for field in ("pct_5d", "pct_1m", "pct_3m")):
+                    signal.score, signal.stage, signal.tags = self._score(signal, 1)
+                    signal.tags.append("量价轮动，资金流未提供")
+                else:
+                    signal.evidence_status = "partial"
+                    signal.tags = ["历史窗口未齐，不计轮动加分"]
+                signals.append(signal)
+            signals.sort(key=lambda signal: signal.score, reverse=True)
+            snapshot = {
+                "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source": "fuyao", "status": "partial" if data.get("errors") else "available",
+                "signals": [signal.to_dict() for signal in signals[:limit]],
+                "scope": data.get("scope"), "return_windows": data.get("return_windows"),
+                "fund_flow_status": "unavailable", "catalog_count": data.get("catalog_count"),
+                "quote_count": data.get("quote_count"),
+                "history_ready_count": sum(s.evidence_status == "available" for s in signals),
+                "errors": data.get("errors", [])[:20],
+            }
+            if not signals:
+                snapshot.update(status="unavailable", error="Fuyao sector evidence unavailable")
+            else:
+                self._write_cache(snapshot)
+            return snapshot
         signals = self._build_signals(raw)
         errors = {
             key: str(value.get("error"))
@@ -159,6 +194,10 @@ class SectorRotationService:
                     "membership_type": fact.get("sector_type"),
                     "membership_source": fact.get("source"),
                     "match_type": match_type,
+                    "pct_1d": signal.pct_1d, "turnover": signal.turnover,
+                    "source_time": signal.source_time, "evidence_status": signal.evidence_status,
+                    "fund_inflow": signal.fund_inflow,
+                    "fund_flow_status": "unavailable" if signal.fund_inflow is None else "available",
                 }
                 previous = matched.get(signal.name)
                 if previous is None or float(item["stock_boost"]) > float(previous["stock_boost"]):
@@ -209,6 +248,8 @@ class SectorRotationService:
                 "rotation_status": snapshot.get("status") or "unavailable",
                 "rotation_as_of": snapshot.get("created_at"),
                 "rotation_source": snapshot.get("source"),
+                "return_windows": snapshot.get("return_windows"),
+                "fund_flow_status": snapshot.get("fund_flow_status"),
                 "matches": matches[:5],
                 "rotation_score": rotation_score,
                 "alignment": alignment,
@@ -222,6 +263,12 @@ class SectorRotationService:
     # 数据获取
     # ------------------------------------------------------------------
     def _fetch_raw(self, limit: int = 30) -> Dict[str, Any]:
+        if self.use_fuyao:
+            from data.services.fuyao_sector_service import FuyaoSectorService
+            try:
+                return {"fuyao": FuyaoSectorService(store=self.store).snapshot_rows(limit=limit)}
+            except Exception as exc:
+                return {"fuyao": {"rows": [], "errors": [str(exc)]}}
         queries = {
             "six_month": "近6个月涨幅排名前30的概念板块",
             "three_month": "近3个月涨幅排名前30的概念板块",
@@ -319,7 +366,7 @@ class SectorRotationService:
         elif s.pct_3m > 35 and s.pct_5d > 8:
             stage = "leader"
             tags.append("强主线")
-        elif s.fund_inflow > 0 and s.pct_1m < 0 and s.pct_5d >= 0:
+        elif (s.fund_inflow or 0) > 0 and s.pct_1m < 0 and s.pct_5d >= 0:
             score += 1.5
             stage = "laggard"
             tags.append("资金潜伏")
@@ -327,7 +374,7 @@ class SectorRotationService:
             score += 1.2
             stage = "accelerating"
             tags.append("补涨启动")
-        elif s.fund_inflow > 0 and 0 <= s.pct_1m <= 10:
+        elif (s.fund_inflow or 0) > 0 and 0 <= s.pct_1m <= 10:
             stage = "laggard"
             tags.append("低涨幅吸筹")
 
@@ -335,6 +382,8 @@ class SectorRotationService:
 
     @staticmethod
     def _sector_to_stock_boost(s: SectorRotationSignal) -> float:
+        if s.evidence_status != "available":
+            return 0.0
         if s.stage == "overheat":
             return min(0.5, max(-1.0, s.score / 10.0))
         if s.stage in ("laggard", "accelerating"):
@@ -478,6 +527,8 @@ class SectorRotationService:
             if not CACHE_PATH.exists():
                 return None
             payload = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            if self.use_fuyao and payload.get("source") != "fuyao":
+                return None
             created_at = payload.get("created_at")
             try:
                 observed_at = datetime.fromisoformat(str(created_at))

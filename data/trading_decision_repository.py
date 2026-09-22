@@ -394,6 +394,8 @@ def _compact_stock(
             "rotation_status": sector.get("rotation_status") or "unavailable",
             "rotation_as_of": sector.get("rotation_as_of"),
             "rotation_source": sector.get("rotation_source"),
+            "return_windows": sector.get("return_windows"),
+            "fund_flow_status": sector.get("fund_flow_status"),
             "rotation_score": sector.get("rotation_score"),
             "alignment": sector.get("alignment") or "unknown",
             "matches": [
@@ -406,6 +408,10 @@ def _compact_stock(
                     "membership_type": row.get("membership_type"),
                     "membership_source": row.get("membership_source"),
                     "match_type": row.get("match_type"),
+                    "pct_1d": row.get("pct_1d"), "turnover": row.get("turnover"),
+                    "source_time": row.get("source_time"),
+                    "evidence_status": row.get("evidence_status"),
+                    "fund_flow_status": row.get("fund_flow_status"),
                 }
                 for row in _list(sector.get("matches"))[:5]
                 if isinstance(row, dict)

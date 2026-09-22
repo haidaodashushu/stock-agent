@@ -17,7 +17,9 @@ from engine.screener import filter_tradeable  # noqa: E402
 from data.store.sqlite_store import StockStore  # noqa: E402
 
 
-def _fmt_money(v: float) -> str:
+def _fmt_money(v: float | None) -> str:
+    if v is None:
+        return "未提供"
     if abs(v) >= 100_000_000:
         return f"{v/100_000_000:.1f}亿"
     return f"{v/10000:.0f}万"
@@ -26,9 +28,11 @@ def _fmt_money(v: float) -> str:
 def main() -> int:
     refresh = "--refresh" in sys.argv
     svc = SectorRotationService()
-    signals = svc.get_signals(refresh=refresh)
+    snapshot = svc.get_snapshot(refresh=refresh)
+    from data.services.sector_rotation_service import SectorRotationSignal
+    signals = [SectorRotationSignal(**row) for row in snapshot.get("signals", [])]
     print("━━━ 板块轮动报告 ━━━")
-    print(f"数据源: 同花顺问财  板块数: {len(signals)}")
+    print(f"数据源: {snapshot.get('source')}  板块数: {len(signals)}  状态: {snapshot.get('status')}")
     print()
 
     groups = [

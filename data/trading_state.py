@@ -490,7 +490,7 @@ def _sector_state() -> dict[str, Any]:
         return {
             "status": "unavailable",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": "iwencai",
+            "source": "fuyao",
             "signals": [],
             "error": str(exc),
         }

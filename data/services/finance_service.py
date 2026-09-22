@@ -19,6 +19,7 @@ class FinanceService:
     ):
         self.store = store or StockStore()
         self.iwencai = iwencai or IwenCaiIntelligenceAdapter()
+        self.use_fuyao = iwencai is None
         self.baostock = baostock or BaoStockAdapter()
 
     @staticmethod
@@ -119,13 +120,24 @@ class FinanceService:
         code: str,
         periods: Iterable[tuple[str, int]] | None = None,
     ) -> tuple[FinancialFactor | None, list[str]]:
-        """Refresh one symbol using IwenCai first and BaoStock as fallback."""
+        """Reuse shared Fuyao-first research inputs; retain BaoStock fallback."""
         code = str(code).zfill(6)
         errors: list[str] = []
+        if self.use_fuyao:
+            from data.research_financials import refresh_financials, latest_financial, FIELDS
+            refreshed = refresh_financials(self.store, [code], limit=1)
+            errors.extend(refreshed["errors"].values())
+            with self.store._get_conn() as conn:
+                evidence = latest_financial(conn, code, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            if evidence and not evidence.get("evidence_stale") and any(evidence.get(field) is not None for field in FIELDS):
+                factor = FinancialFactor(code=code, period=evidence["period"], source=evidence.get("source", "fuyao"),
+                    **{field: evidence.get(field) for field in FIELDS if field != "operating_cash_flow"})
+                return self.upsert_factor(factor), errors
+            # The shared refresh already tried IwenCai; do not query it twice.
         try:
             factors = [
                 self.normalize_factor(item)
-                for item in self.iwencai.stock_financials(code)
+                for item in ([] if self.use_fuyao else self.iwencai.stock_financials(code))
                 if str(item.code).split(".")[0].zfill(6) == code and self.is_informative(item)
             ]
             if factors:

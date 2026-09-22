@@ -88,6 +88,10 @@ def load_stock_memberships(
     conn = store._get_conn()
     try:
         normalized_codes: set[str] = set()
+        authoritative = set()
+        cutoff = (datetime.now()-timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='fuyao_sector_state'").fetchone():
+            authoritative = {r[0] for r in conn.execute("SELECT sector_name FROM fuyao_sector_state WHERE observed_at>=?", (cutoff,))}
         for row in conn.execute(
             f"""SELECT code,sector_name,sector_type,source,observed_at
                   FROM stock_sector_membership
@@ -95,6 +99,10 @@ def load_stock_memberships(
                  ORDER BY code,sector_type DESC,sector_name""",
             normalized,
         ):
+            if row["source"] == "fuyao_constituents" and str(row["observed_at"] or "") < cutoff:
+                continue
+            if row["sector_name"] in authoritative and row["source"] != "fuyao_constituents":
+                continue
             code = str(row["code"]).zfill(6)
             normalized_codes.add(code)
             result[code].append(dict(row))
@@ -104,7 +112,7 @@ def load_stock_memberships(
             normalized,
         ):
             industry = str(row["industry"] or "").strip()
-            if industry:
+            if industry and industry not in authoritative:
                 result[str(row["code"]).zfill(6)].append({
                     "code": str(row["code"]).zfill(6),
                     "sector_name": industry,
@@ -121,7 +129,7 @@ def load_stock_memberships(
                 if str(value).strip()
             }
             for code in requested.intersection(members):
-                if code in normalized_codes:
+                if code in normalized_codes or row["name"] in authoritative:
                     continue
                 result[code].append({
                     "code": code,
@@ -136,12 +144,16 @@ def load_stock_memberships(
     for code in normalized:
         static = FIFTEEN_FIVE_STOCKS.get(code) or {}
         for name in _names(static.get("concepts", [])):
+            if name in authoritative:
+                continue
             result[code].append({
                 "code": code, "sector_name": name, "sector_type": "concept",
                 "source": "static_fifteen_five", "observed_at": "",
             })
         ai = AI_COMPUTE_STOCKS.get(code) or {}
         for name in _names(ai.get("sectors", [])):
+            if name in authoritative:
+                continue
             result[code].append({
                 "code": code, "sector_name": name, "sector_type": "concept",
                 "source": "static_ai_compute", "observed_at": "",
@@ -169,6 +181,7 @@ class StockSectorMembershipService:
 
     def __init__(self, *, store: StockStore | None = None, adapter=None, batch_size: int = 10):
         self.store = store or StockStore()
+        self.use_fuyao = adapter is None
         if adapter is None:
             from data.adapters.iwencai_intelligence_adapter import IwenCaiIntelligenceAdapter
             adapter = IwenCaiIntelligenceAdapter()
@@ -177,6 +190,9 @@ class StockSectorMembershipService:
 
     def ensure(self, codes: Iterable[str], *, max_age_hours: int = PROFILE_MAX_AGE_HOURS) -> dict:
         normalized = _codes(codes)
+        if self.use_fuyao:
+            from data.services.fuyao_sector_service import FuyaoSectorService
+            return FuyaoSectorService(store=self.store).ensure_memberships(normalized)
         stale = self._stale_codes(normalized, max_age_hours=max_age_hours)
         result = {
             "requested": len(normalized),

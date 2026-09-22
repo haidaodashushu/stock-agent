@@ -1,4 +1,4 @@
-"""Optional, bounded Fuyao financial indicators; never infer quote freshness."""
+"""Bounded Fuyao requests with shared rate-limit state and explicit data contracts."""
 from __future__ import annotations
 
 import json
@@ -92,13 +92,39 @@ class FuyaoAdapter:
                     raise RuntimeError("Fuyao transport/JSON failure; no immediate retry") from None
                 if not isinstance(raw, dict) or raw.get("code") != 0:
                     code = raw.get("code") if isinstance(raw, dict) else None
-                    # Only known HTTP 429 is classified as rate limiting.
+                    if code == 4001:
+                        cooldowns[key_id] = time.time() + 60
+                        continue
                     safe_code = code if isinstance(code, int) else "unknown"
                     raise RuntimeError(f"Fuyao business code {safe_code}; no immediate retry")
                 state["preferred"] = key_id
                 cooldowns.pop(key_id, None)
                 return raw
             raise RuntimeError("Fuyao all configured keys rate limited or cooling down; deferred retry")
+
+    def get(self, path, **params):
+        if not self.api_key:
+            raise RuntimeError("Fuyao credentials unavailable")
+        if not path.startswith("/api/") or "?" in path:
+            raise ValueError("invalid Fuyao endpoint")
+        raw = self._request("https://fuyao.aicubes.cn" + path + "?" + urllib.parse.urlencode(params))
+        if not isinstance(raw.get("data"), dict):
+            raise ValueError("Fuyao data object missing")
+        return raw["data"]
+
+    def statement(self, code, kind):
+        if not self.api_key:
+            return []
+        if not re.fullmatch(r"\d{6}", code) or kind not in {"income", "cash-flow"}:
+            raise ValueError("invalid financial statement request")
+        from data.fetcher.tencent_quote import _tencent_symbol
+        symbol = code + "." + _tencent_symbol(code)[:2].upper()
+        data = self.get(f"/api/a-share/financials/{kind}-statements",
+                        thscode=symbol, period="quarterly", limit=4)
+        rows = data.get("item")
+        if not isinstance(rows, list) or any(row.get("thscode") != symbol for row in rows):
+            raise ValueError("Fuyao statement identity mismatch")
+        return rows
 
     def financials(self, code, report):
         if not self.api_key:

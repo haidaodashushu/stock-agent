@@ -100,6 +100,7 @@ class CandidateEnrichmentService:
     ):
         self.store = store or StockStore()
         self.adapter = adapter or IwenCaiIntelligenceAdapter()
+        self.use_fuyao = adapter is None
         self.batch_size = max(1, min(10, int(batch_size)))
 
     def refresh(
@@ -130,6 +131,16 @@ class CandidateEnrichmentService:
         if not normalized:
             return result
 
+        if self.use_fuyao:
+            from data.research_financials import refresh_financials
+            from data.services.stock_sector_membership_service import StockSectorMembershipService
+            membership = StockSectorMembershipService(store=self.store).ensure(normalized)
+            finance = refresh_financials(self.store, normalized, limit=len(normalized))
+            result["profiles_seen"] = membership["refreshed"]
+            result["concept_memberships"] = membership["memberships"]
+            result["financials_seen"] = finance["available"]
+            result["errors"].extend(membership["errors"])
+            result["errors"].extend(f"financials[{code}]: {error}" for code, error in finance["errors"].items())
         names = self._name_map(normalized)
         conn = self.store._get_conn()
         try:
@@ -152,14 +163,15 @@ class CandidateEnrichmentService:
                 requested = set(batch)
                 key = ",".join(batch)
 
-                try:
-                    profiles = self.adapter.query_stock_profiles(batch)
-                    profile_result = self._persist_profiles(conn, profiles, requested)
-                    result["profiles_seen"] += profile_result["profiles"]
-                    result["concept_memberships"] += profile_result["concept_memberships"]
-                    names.update(profile_result["names"])
-                except Exception as exc:
-                    result["errors"].append(f"profiles[{key}]: {exc}")
+                if not self.use_fuyao:
+                    try:
+                        profiles = self.adapter.query_stock_profiles(batch)
+                        profile_result = self._persist_profiles(conn, profiles, requested)
+                        result["profiles_seen"] += profile_result["profiles"]
+                        result["concept_memberships"] += profile_result["concept_memberships"]
+                        names.update(profile_result["names"])
+                    except Exception as exc:
+                        result["errors"].append(f"profiles[{key}]: {exc}")
 
                 # hithink-event-query returns a stock snapshot without a dated
                 # event for these queries.  Search the news index per stock so
@@ -223,24 +235,25 @@ class CandidateEnrichmentService:
                         result["errors"].append(f"news[{code}]: {exc}")
                         self._mark_news_refreshed(conn, code, status="error", detail=str(exc))
 
-                try:
-                    factors = self.adapter.query_financials(
-                        (
-                            f"{key} 最新营业收入同比增长率 净利润同比增长率 "
-                            "ROE 毛利率 净利率 资产负债率"
-                        ),
-                        limit=len(batch),
-                    )
-                    for factor in factors:
-                        code = str(factor.code).split(".")[0].zfill(6)
-                        if code not in requested:
-                            continue
-                        if not self._informative_factor(factor):
-                            continue
-                        result["financials_seen"] += 1
-                        self._upsert_financial(conn, factor)
-                except Exception as exc:
-                    result["errors"].append(f"financials[{key}]: {exc}")
+                if not self.use_fuyao:
+                    try:
+                        factors = self.adapter.query_financials(
+                            (
+                                f"{key} 最新营业收入同比增长率 净利润同比增长率 "
+                                "ROE 毛利率 净利率 资产负债率"
+                            ),
+                            limit=len(batch),
+                        )
+                        for factor in factors:
+                            code = str(factor.code).split(".")[0].zfill(6)
+                            if code not in requested:
+                                continue
+                            if not self._informative_factor(factor):
+                                continue
+                            result["financials_seen"] += 1
+                            self._upsert_financial(conn, factor)
+                    except Exception as exc:
+                        result["errors"].append(f"financials[{key}]: {exc}")
 
                 conn.commit()
         finally:
